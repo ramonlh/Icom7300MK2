@@ -1,0 +1,9 @@
+build*/
+CMakeLists.txt.user
+*.user
+*.autosave
+android/.gradle/
+android/local.properties
+android/app/build/
+*.zip
+*.sha256

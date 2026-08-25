@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=IC-7300MK2 Control
+GenericName=Control de transceptor
+Comment=Control CI-V para Icom IC-7300MK2
+Exec=Icom7300Mk2Control
+Icon=es.ramonlorenzo.Icom7300Mk2Control
+Terminal=false
+Categories=HamRadio;Utility;
+StartupNotify=true
+StartupWMClass=Icom7300Mk2Control

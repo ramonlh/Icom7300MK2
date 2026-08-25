@@ -1,0 +1,35 @@
+name: Publicar versión
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código etiquetado
+        uses: actions/checkout@v4
+
+      - name: Crear paquete fuente
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          package="Icom7300Mk2Control_${VERSION_TAG}.zip"
+          git archive --format=zip --prefix="Icom7300Mk2Control_${VERSION_TAG}/" --output="$package" HEAD
+          sha256sum "$package" > "${package}.sha256"
+
+      - name: Crear GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          package="Icom7300Mk2Control_${VERSION_TAG}.zip"
+          gh release create "$VERSION_TAG" "$package" "${package}.sha256" \
+            --verify-tag \
+            --generate-notes \
+            --title "Icom7300Mk2Control ${VERSION_TAG}"
