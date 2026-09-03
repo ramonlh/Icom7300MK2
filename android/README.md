@@ -12,6 +12,8 @@ radio y no incluye órdenes PTT ni TUNE.
 HTTP sin cifrar se admite para el servidor actual, exclusivamente dentro de una
 LAN o una VPN como Tailscale/WireGuard. No publique el puerto 7300 en Internet.
 
-La primera versión muestra conexión, frecuencia, modo, filtro, banda y S-meter,
-permite refrescar y sintonizar ±1 kHz, y bloquea controles durante TX o CI-V
-ocupado. El servicio declara la categoría Android Auto `IOT`.
+La pantalla principal muestra conexión, frecuencia, modo, filtro, banda y
+S-meter con actualización automática. Las pantallas auxiliares permiten
+sintonizar ±1 kHz y seleccionar modo, filtro y banda. Los controles se bloquean
+durante TX o mientras CI-V está ocupado. El servicio declara la categoría
+Android Auto `IOT`.

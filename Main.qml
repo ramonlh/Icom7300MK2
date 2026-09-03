@@ -8,17 +8,20 @@ ApplicationWindow {
     id: window
 
     width: 1120
-    height: 820
+    height: 880
     minimumWidth: 1050
-    minimumHeight: 650
+    minimumHeight: 880
+    maximumHeight: 880
 
     visible: true
-    title: "Control IC-7300MK2 · Versión 1.2.11"
+    title: "Control IC-7300MK2 · Versión 1.2.12"
     color: "#454545"
 
     property bool diagnosticsVisible: false
     property bool remoteServerVisible: false
     property bool settingsVisible: false
+    property bool compactVisible: false
+    property bool superCompactVisible: false
     property bool txSettingsVisible: false
     property bool cwSettingsVisible: false
     property bool toneRttySettingsVisible: false
@@ -26,9 +29,11 @@ ApplicationWindow {
     property bool morseTrainerVisible: false
     property bool morseWorkspaceActive: false
     property bool applicationClosing: false
+    property bool startupComplete: false
     property int mainVisibilityBeforeMorse: Window.Windowed
     property bool scannerVisible: false
     property bool memoryQuickPanelVisible: false
+    property string lanLogText: ""
     property int memoryQuickSelectedChannel: 1
     property int pendingMemoryStoreChannel: 1
     property int pendingMemoryClearChannel: 1
@@ -42,14 +47,45 @@ ApplicationWindow {
     property int stepIndex: 3
     property real tuningAngle: 0
 
+    Component.onCompleted: {
+        if (applicationLauncher.compactModePreferred) {
+            Qt.callLater(function() {
+                setCompactMode(true)
+                startupComplete = true
+            })
+        } else {
+            const savedMainX = applicationLauncher.mainWindowX
+            const savedMainY = applicationLauncher.mainWindowY
+            if (savedMainX !== -1)
+                window.x = Math.max(
+                    Screen.virtualX,
+                    Math.min(savedMainX,
+                             Screen.virtualX
+                             + Screen.desktopAvailableWidth
+                             - window.width))
+            if (savedMainY !== -1)
+                window.y = Math.max(
+                    Screen.virtualY,
+                    Math.min(savedMainY,
+                             Screen.virtualY
+                             + Screen.desktopAvailableHeight
+                             - window.height))
+            startupComplete = true
+        }
+    }
+
     onXChanged: {
         if (memoryQuickPanelVisible)
             Qt.callLater(positionMemoryQuickWindow)
+        if (startupComplete && visible && !compactVisible)
+            applicationLauncher.mainWindowX = Math.round(x)
     }
 
     onYChanged: {
         if (memoryQuickPanelVisible)
             Qt.callLater(positionMemoryQuickWindow)
+        if (startupComplete && visible && !compactVisible)
+            applicationLauncher.mainWindowY = Math.round(y)
     }
 
     onWidthChanged: {
@@ -64,6 +100,18 @@ ApplicationWindow {
 
     onClosing: {
         applicationClosing = true
+        // Notify the IC-7300 before Qt tears down the event loop.
+        applicationLauncher.shutdownLanConnection()
+        if (compactWindow.visible)
+            compactWindow.close()
+        if (superCompactWindow.visible)
+            superCompactWindow.close()
+        // Es una Window nativa independiente: cambiar solo la bandera de
+        // estado no procesa su evento de cierre. Ciérrala expresamente antes
+        // de abandonar el bucle de eventos para que no quede huérfana.
+        if (remoteServerWindow.visible)
+            remoteServerWindow.close()
+        remoteServerVisible = false
         memoryQuickPanelVisible = false
         scannerVisible = false
         scopeVisible = false
@@ -72,7 +120,6 @@ ApplicationWindow {
         morseTrainer.stopReceptionPlayback()
         morseTrainer.stopCapture()
         remoteServer.stop()
-        remoteServerVisible = false
         settingsVisible = false
         radioController.stopSpectrumScope()
         radioController.shutdown()
@@ -82,9 +129,348 @@ ApplicationWindow {
     }
 
     property var modeNames: [
-        "LSB", "USB", "CW", "RTTY",
-        "AM", "FM", "CW-R", "RTTY-R"
+        "LSB", "AM", "CW", "RTTY", "SSTV",
+        "USB", "FM", "CW-R", "RTTY-R", "FT8/FT4"
     ]
+    property string externalDigitalMode: ""
+    property var externalRadioState: null
+
+    function saveExternalRadioState() {
+        if (externalRadioState !== null)
+            return
+
+        const parsedFilter = Number(String(radioController.filterText)
+                                    .replace(/[^0-9]/g, ""))
+        externalRadioState = {
+            frequency: radioController.frequencyHz,
+            mode: radioController.modeText,
+            data: radioController.dataMode,
+            filter: parsedFilter >= 1 && parsedFilter <= 3
+                    ? parsedFilter : 1,
+            vfo: radioController.selectedVfo
+        }
+    }
+
+    function restoreExternalRadioState() {
+        if (externalRadioState === null)
+            return
+
+        const state = externalRadioState
+        externalRadioState = null
+        externalDigitalMode = ""
+        radioController.setVfoFrequency(state.vfo,
+                                        String(state.frequency))
+        radioController.setOperatingModeState(state.mode,
+                                              state.data,
+                                              state.filter)
+    }
+
+    function saveCurrentDigitalFrequency() {
+        const frequency = radioController.frequencyHz
+        if (frequency < 100000 || frequency > 60000000)
+            return
+
+        if (externalDigitalMode === "RTTY"
+                || externalDigitalMode === "RTTY-R")
+            applicationLauncher.rttyFrequencyHz = frequency
+        else if (externalDigitalMode === "CW"
+                 || externalDigitalMode === "CW-R")
+            applicationLauncher.cwFrequencyHz = frequency
+        else if (externalDigitalMode === "FT8/FT4")
+            applicationLauncher.ftFrequencyHz = frequency
+        else if (externalDigitalMode === "SSTV")
+            applicationLauncher.sstvFrequencyHz = frequency
+        else if (externalDigitalMode === "PSK")
+            applicationLauncher.pskFrequencyHz = frequency
+        else if (externalDigitalMode === "OLIVIA")
+            applicationLauncher.oliviaFrequencyHz = frequency
+        else if (externalDigitalMode === "JS8")
+            applicationLauncher.js8FrequencyHz = frequency
+        else if (externalDigitalMode === "WEFAX")
+            applicationLauncher.wefaxFrequencyHz = frequency
+    }
+
+    function stopExternalProgramsAndRestore() {
+        saveCurrentDigitalFrequency()
+        applicationLauncher.stopDecodium()
+        applicationLauncher.stopFldigi()
+        applicationLauncher.stopQsstv()
+        applicationLauncher.stopJs8call()
+        extraDigitalModeBox.currentIndex = 0
+        compactExtraDigitalModeBox.currentIndex = 0
+        restoreExternalRadioState()
+    }
+
+    function prepareExternalProgram(programName) {
+        if (applicationLauncher.decodiumRunning
+                || applicationLauncher.fldigiRunning
+                || applicationLauncher.qsstvRunning
+                || applicationLauncher.js8callRunning)
+            saveCurrentDigitalFrequency()
+        saveExternalRadioState()
+        if (programName !== "decodium")
+            applicationLauncher.stopDecodium()
+        if (programName !== "fldigi")
+            applicationLauncher.stopFldigi()
+        if (programName !== "qsstv")
+            applicationLauncher.stopQsstv()
+        if (programName !== "js8call")
+            applicationLauncher.stopJs8call()
+    }
+
+    function setCompactMode(enabled) {
+        if (enabled && superCompactWindow.visible) {
+            superCompactWindow.returningToCompact = true
+            superCompactWindow.close()
+            superCompactVisible = false
+        }
+        if (!enabled && superCompactWindow.visible) {
+            superCompactWindow.returningToCompact = true
+            superCompactWindow.close()
+            superCompactVisible = false
+        }
+        compactVisible = enabled
+        if (!applicationClosing)
+            applicationLauncher.compactModePreferred = enabled
+        if (enabled) {
+            const savedX = applicationLauncher.compactWindowX
+            const savedY = applicationLauncher.compactWindowY
+            const savedWidth = Math.max(compactWindow.baseWidth,
+                                        applicationLauncher.compactWindowWidth)
+            compactWindow.adjustingSize = true
+            compactWindow.width = savedWidth
+            compactWindow.height = Math.round(savedWidth
+                                              / compactWindow.baseAspect)
+            compactWindow.adjustingSize = false
+            compactWindow.visible = true
+            const defaultX = window.x + (window.width - compactWindow.width) / 2
+            const defaultY = window.y
+            compactWindow.x = Math.max(
+                Screen.virtualX,
+                Math.min(savedX !== -1 ? savedX : defaultX,
+                         Screen.virtualX + Screen.desktopAvailableWidth
+                         - compactWindow.width))
+            compactWindow.y = Math.max(
+                Screen.virtualY,
+                Math.min(savedY !== -1 ? savedY : defaultY,
+                         Screen.virtualY + Screen.desktopAvailableHeight
+                         - compactWindow.height))
+            window.hide()
+            Qt.callLater(function() {
+                // El cierre de SUPER puede procesarse después de esta
+                // función; volver a mostrar explícitamente la compacta
+                // garantiza que nunca queden ambas ventanas ocultas.
+                compactWindow.visible = true
+                compactWindow.show()
+                compactWindow.raise()
+                compactWindow.requestActivate()
+            })
+        } else {
+            if (compactWindow.visible) {
+                compactWindow.returningToFullView = true
+                compactWindow.close()
+                // Window.close() puede completar de forma asíncrona en el
+                // primer arranque compacto; fuerza además su visibilidad a
+                // false antes de mostrar la principal.
+                compactWindow.visible = false
+            }
+            if (!applicationClosing) {
+                const savedMainX = applicationLauncher.mainWindowX
+                const savedMainY = applicationLauncher.mainWindowY
+                if (savedMainX !== -1)
+                    window.x = Math.max(
+                        Screen.virtualX,
+                        Math.min(savedMainX,
+                                 Screen.virtualX
+                                 + Screen.desktopAvailableWidth
+                                 - window.width))
+                if (savedMainY !== -1)
+                    window.y = Math.max(
+                        Screen.virtualY,
+                        Math.min(savedMainY,
+                                 Screen.virtualY
+                                 + Screen.desktopAvailableHeight
+                                 - window.height))
+                Qt.callLater(function() {
+                    window.showNormal()
+                    window.raise()
+                    window.requestActivate()
+                })
+            }
+        }
+    }
+
+    function setSuperCompactMode(enabled) {
+        superCompactVisible = enabled
+        if (enabled) {
+            if (compactWindow.visible) {
+                compactWindow.returningToFullView = true
+                compactWindow.close()
+            }
+            compactVisible = false
+            window.hide()
+            // Sitúa SUPER en el área libre inmediatamente encima de la barra
+            // de tareas; desde ahí se puede arrastrar a cualquier otro hueco.
+            const savedSuperX = applicationLauncher.superWindowX
+            const savedSuperY = applicationLauncher.superWindowY
+            superCompactWindow.x = savedSuperX >= Screen.virtualX
+                                  ? savedSuperX
+                                  : Screen.virtualX + Screen.desktopAvailableWidth
+                                    - superCompactWindow.width - 12
+            superCompactWindow.y = savedSuperY >= Screen.virtualY
+                                  ? savedSuperY
+                                  : Screen.virtualY + Screen.desktopAvailableHeight
+                                    - superCompactWindow.height - 6
+            superCompactWindow.show()
+            superCompactWindow.raise()
+            superCompactWindow.requestActivate()
+        } else if (!applicationClosing) {
+            superCompactWindow.hide()
+            window.showNormal()
+            window.raise()
+            window.requestActivate()
+        }
+    }
+
+    function activateCompactMode(modeName) {
+        if (modeName === "SSTV") {
+            if (applicationLauncher.qsstvRunning) {
+                stopExternalProgramsAndRestore()
+                return
+            }
+            prepareExternalProgram("qsstv")
+            externalDigitalMode = "SSTV"
+            radioController.setFrequency(String(applicationLauncher.sstvFrequencyHz))
+            radioController.setOperatingModeState("USB", true, 1)
+            applicationLauncher.launchQsstv()
+        } else if (modeName === "FT8/FT4") {
+            if (applicationLauncher.decodiumRunning) {
+                stopExternalProgramsAndRestore()
+                return
+            }
+            prepareExternalProgram("decodium")
+            externalDigitalMode = "FT8/FT4"
+            radioController.setFrequency(String(applicationLauncher.ftFrequencyHz))
+            radioController.setOperatingModeState("USB", true, 1)
+            applicationLauncher.launchDecodium()
+        } else if (modeName === "RTTY" || modeName === "RTTY-R") {
+            if (applicationLauncher.fldigiRunning
+                    && externalDigitalMode === modeName) {
+                stopExternalProgramsAndRestore()
+                return
+            }
+            prepareExternalProgram("fldigi")
+            externalDigitalMode = modeName
+            radioController.setFrequency(String(applicationLauncher.rttyFrequencyHz))
+            radioController.setOperatingModeState("USB", true, 1)
+            applicationLauncher.launchFldigi()
+            applicationLauncher.setFldigiMode("RTTY")
+            applicationLauncher.setFldigiReverse(modeName === "RTTY-R")
+        } else {
+            if ((modeName === "CW" || modeName === "CW-R")
+                    && applicationLauncher.fldigiRunning
+                    && radioController.modeText === modeName) {
+                stopExternalProgramsAndRestore()
+                return
+            }
+            if (applicationLauncher.decodiumRunning
+                    || applicationLauncher.qsstvRunning
+                    || applicationLauncher.js8callRunning
+                    || (applicationLauncher.fldigiRunning
+                        && modeName !== "CW" && modeName !== "CW-R"))
+                stopExternalProgramsAndRestore()
+            externalDigitalMode = ""
+            if (modeName === "CW" || modeName === "CW-R") {
+                radioController.setFrequency(String(applicationLauncher.cwFrequencyHz))
+                if (applicationLauncher.fldigiRunning)
+                    externalDigitalMode = modeName
+            }
+            if (applicationLauncher.lanConnected
+                    && ["LSB","USB","AM","CW","RTTY","FM","CW-R","RTTY-R"].indexOf(modeName) >= 0)
+                applicationLauncher.testLanModeName(modeName)
+            else
+                radioController.setOperatingMode(modeName)
+        }
+    }
+
+    Timer {
+        id: decodiumModeGuard
+        interval: 1200
+        repeat: false
+        onTriggered: {
+            if (applicationLauncher.decodiumRunning
+                    && !(radioController.modeText === "USB"
+                         && radioController.dataMode)) {
+                applicationLauncher.stopDecodium()
+                restoreExternalRadioState()
+            }
+            if (applicationLauncher.qsstvRunning
+                    && !(radioController.modeText === "USB"
+                         && radioController.dataMode)) {
+                applicationLauncher.stopQsstv()
+                restoreExternalRadioState()
+            }
+            if (applicationLauncher.fldigiRunning
+                    && !((radioController.modeText === "USB"
+                          && radioController.dataMode)
+                         || radioController.modeText === "CW"
+                         || radioController.modeText === "CW-R")) {
+                externalDigitalMode = ""
+                applicationLauncher.stopFldigi()
+                restoreExternalRadioState()
+            }
+            if (applicationLauncher.js8callRunning
+                    && !(radioController.modeText === "USB"
+                         && radioController.dataMode)) {
+                applicationLauncher.stopJs8call()
+                restoreExternalRadioState()
+            }
+        }
+    }
+
+    Connections {
+        target: radioController
+
+        function onModeChanged() {
+            decodiumModeGuard.restart()
+            if (radioController.modeText === "RTTY"
+                    || radioController.modeText === "RTTY-R") {
+                externalDigitalMode = radioController.modeText
+                radioController.setOperatingModeState(
+                    "USB", true, 1
+                )
+                applicationLauncher.launchFldigi()
+                applicationLauncher.setFldigiMode("RTTY")
+                applicationLauncher.setFldigiReverse(
+                    radioController.modeText === "RTTY-R")
+            } else if (radioController.modeText === "CW"
+                       || radioController.modeText === "CW-R") {
+                externalDigitalMode = applicationLauncher.fldigiRunning
+                                      ? radioController.modeText : ""
+            }
+        }
+
+        function onDataModeChanged() {
+            decodiumModeGuard.restart()
+        }
+    }
+
+    Connections {
+        target: applicationLauncher
+
+        function onFldigiRunningChanged() {
+            if (!applicationLauncher.fldigiRunning)
+                externalDigitalMode = ""
+        }
+
+        function onStatusChanged() {
+            const line = applicationLauncher.status
+            if (!line) return
+            lanLogText = (lanLogText ? lanLogText + "\n" : "") + line
+            if (lanLogText.length > 4000)
+                lanLogText = lanLogText.slice(-4000)
+        }
+    }
 
     property var stepNames: [
         "1 Hz", "10 Hz", "100 Hz",
@@ -420,9 +806,11 @@ ApplicationWindow {
     }
 
     function controlsEnabled() {
-        return radioController.connected
+        return (radioController.connected || applicationLauncher.lanConnected)
                && !radioController.transmitting
-               && !radioController.busy
+               // El estado busy pertenece a la cola CI-V por USB. No debe
+               // bloquear los controles cuando la sesión activa es LAN.
+               && (applicationLauncher.lanConnected || !radioController.busy)
     }
 
     function raiseAuxiliaryWindow(popup) {
@@ -1045,12 +1433,13 @@ ApplicationWindow {
         id: toolbarButton
 
         property color iconColor: "#48bffd"
+        property color groupAccentColor: "#5f8799"
         property string iconName: "generic"
         property string tip:
             controlHelp(text)
 
-        implicitWidth: 72
-        implicitHeight: 54
+        implicitWidth: 56
+        implicitHeight: 48
 
         onIconColorChanged:
             iconCanvas.requestPaint()
@@ -1065,17 +1454,44 @@ ApplicationWindow {
             radius: 4
             color:
                 toolbarButton.down
-                ? "#4e555a"
+                ? Qt.tint(
+                      "#30383d",
+                      Qt.rgba(
+                          toolbarButton.groupAccentColor.r,
+                          toolbarButton.groupAccentColor.g,
+                          toolbarButton.groupAccentColor.b,
+                          0.48
+                      )
+                  )
                 : toolbarButton.hovered
-                  ? "#474f54"
-                  : "#373c40"
+                  ? Qt.tint(
+                        "#30383d",
+                        Qt.rgba(
+                            toolbarButton.groupAccentColor.r,
+                            toolbarButton.groupAccentColor.g,
+                            toolbarButton.groupAccentColor.b,
+                            0.38
+                        )
+                    )
+                  : Qt.tint(
+                        "#252e34",
+                        Qt.rgba(
+                            toolbarButton.groupAccentColor.r,
+                            toolbarButton.groupAccentColor.g,
+                            toolbarButton.groupAccentColor.b,
+                            0.24
+                        )
+                    )
             border.color:
                 toolbarButton.hovered
                 ? Qt.lighter(
-                      toolbarButton.iconColor,
-                      1.25
+                      toolbarButton.groupAccentColor,
+                      1.35
                   )
-                : "#6e7478"
+                : Qt.lighter(
+                      toolbarButton.groupAccentColor,
+                      1.10
+                  )
             border.width: 1
 
             gradient: Gradient {
@@ -1083,18 +1499,40 @@ ApplicationWindow {
                     position: 0
                     color:
                         toolbarButton.hovered
-                        ? "#596269"
-                        : "#50565b"
+                        ? Qt.lighter(
+                              toolbarButton.groupAccentColor,
+                              1.05
+                          )
+                        : Qt.darker(
+                              toolbarButton.groupAccentColor,
+                              1.18
+                          )
                 }
 
                 GradientStop {
                     position: 0.48
-                    color: "#373d41"
+                    color: Qt.tint(
+                               "#293136",
+                               Qt.rgba(
+                                   toolbarButton.groupAccentColor.r,
+                                   toolbarButton.groupAccentColor.g,
+                                   toolbarButton.groupAccentColor.b,
+                                   0.25
+                               )
+                           )
                 }
 
                 GradientStop {
                     position: 1
-                    color: "#282d30"
+                    color: Qt.tint(
+                               "#20262a",
+                               Qt.rgba(
+                                   toolbarButton.groupAccentColor.r,
+                                   toolbarButton.groupAccentColor.g,
+                                   toolbarButton.groupAccentColor.b,
+                                   0.18
+                               )
+                           )
                 }
             }
 
@@ -1209,6 +1647,25 @@ ApplicationWindow {
                             ctx.beginPath()
                             ctx.arc(25.5, 7.5, 2.1, 0, Math.PI * 2)
                             ctx.fill()
+                        } else if (toolbarButton.iconName === "browser") {
+                            ctx.strokeRect(5.5, 7, 21, 18)
+                            line(5.5, 11.5, 26.5, 11.5)
+
+                            ctx.beginPath()
+                            ctx.arc(8.5, 9.3, 0.9, 0, Math.PI * 2)
+                            ctx.fill()
+                            ctx.beginPath()
+                            ctx.arc(11.5, 9.3, 0.9, 0, Math.PI * 2)
+                            ctx.fill()
+
+                            ctx.beginPath()
+                            ctx.arc(16, 18.2, 5.1, 0, Math.PI * 2)
+                            ctx.stroke()
+                            line(10.9, 18.2, 21.1, 18.2)
+
+                            ctx.beginPath()
+                            ctx.ellipse(13.5, 13.1, 5, 10.2)
+                            ctx.stroke()
                         } else if (toolbarButton.iconName === "remote") {
                             ctx.strokeRect(6.5, 7.5, 19, 14)
                             line(12, 25, 20, 25)
@@ -1426,10 +1883,86 @@ ApplicationWindow {
                     toolbarButton.hovered
                     ? "#ffffff"
                     : "#e7edf1"
-                font.pixelSize: 9
+                font.pixelSize:
+                    toolbarButton.text.length > 8 ? 7 : 9
                 font.bold: true
                 horizontalAlignment:
                     Text.AlignHCenter
+                elide: Text.ElideRight
+                clip: true
+            }
+        }
+    }
+
+    component ToolbarGroup: Rectangle {
+        id: toolbarGroup
+
+        default property alias buttons: toolbarGroupButtons.data
+        property string caption: "GRUPO"
+        property color accentColor: "#5f8799"
+
+        function applyAccent(item) {
+            if (!item)
+                return
+            if (typeof item.groupAccentColor !== "undefined")
+                item.groupAccentColor = accentColor
+            if (typeof item.children === "undefined")
+                return
+            for (let index = 0; index < item.children.length; ++index)
+                applyAccent(item.children[index])
+        }
+
+        Component.onCompleted:
+            Qt.callLater(function() {
+                toolbarGroup.applyAccent(toolbarGroupButtons)
+            })
+
+        onAccentColorChanged:
+            Qt.callLater(function() {
+                toolbarGroup.applyAccent(toolbarGroupButtons)
+            })
+
+        implicitWidth: toolbarGroupContent.implicitWidth + 10
+        implicitHeight: 66
+        radius: 5
+        color: "#30363a"
+        border.color: Qt.darker(toolbarGroup.accentColor, 1.12)
+        border.width: 1
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 1
+            height: 14
+            radius: 4
+            color: toolbarGroup.accentColor
+            opacity: 0.34
+        }
+
+        ColumnLayout {
+            id: toolbarGroupContent
+            anchors.fill: parent
+            anchors.margins: 4
+            spacing: 1
+
+            Text {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 11
+                text: toolbarGroup.caption
+                color: Qt.lighter(toolbarGroup.accentColor, 1.55)
+                font.pixelSize: 8
+                font.bold: true
+                font.letterSpacing: 0.6
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            RowLayout {
+                id: toolbarGroupButtons
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 3
             }
         }
     }
@@ -1439,7 +1972,10 @@ ApplicationWindow {
 
         property bool selected: false
         property color activeColor: "#2f72b9"
+        property color groupAccentColor: "#5f8799"
         property int textPixelSize: 10
+        // Icono vectorial opcional para los botones compactos.
+        property string iconName: ""
         property string tip:
             controlHelp(text)
 
@@ -1451,16 +1987,46 @@ ApplicationWindow {
                 panelButton.selected
                 ? panelButton.activeColor
                 : panelButton.down
-                  ? "#4b4b4b"
+                  ? Qt.tint(
+                        "#252b2f",
+                        Qt.rgba(
+                            panelButton.groupAccentColor.r,
+                            panelButton.groupAccentColor.g,
+                            panelButton.groupAccentColor.b,
+                            0.48
+                        )
+                    )
                   : panelButton.hovered
-                    ? "#292929"
-                    : "#171717"
+                    ? Qt.tint(
+                          "#252b2f",
+                          Qt.rgba(
+                              panelButton.groupAccentColor.r,
+                              panelButton.groupAccentColor.g,
+                              panelButton.groupAccentColor.b,
+                              0.38
+                          )
+                      )
+                    : Qt.tint(
+                          "#171b1e",
+                          Qt.rgba(
+                              panelButton.groupAccentColor.r,
+                              panelButton.groupAccentColor.g,
+                              panelButton.groupAccentColor.b,
+                              0.24
+                          )
+                      )
             border.color:
                 panelButton.selected
                 ? "#d1e9ff"
                 : panelButton.hovered
-                  ? "#a0a0a0"
-                  : "#707070"
+                  ? Qt.lighter(
+                        panelButton.groupAccentColor,
+                        1.38
+                    )
+                  : Qt.lighter(
+                        panelButton.groupAccentColor,
+                        1.08
+                    )
             border.width: 1
 
             gradient: Gradient {
@@ -1472,7 +2038,10 @@ ApplicationWindow {
                               panelButton.activeColor,
                               1.16
                           )
-                        : "#343434"
+                        : Qt.darker(
+                              panelButton.groupAccentColor,
+                              1.12
+                          )
                 }
 
                 GradientStop {
@@ -1483,7 +2052,15 @@ ApplicationWindow {
                               panelButton.activeColor,
                               1.22
                           )
-                        : "#111111"
+                        : Qt.tint(
+                              "#111518",
+                              Qt.rgba(
+                                  panelButton.groupAccentColor.r,
+                                  panelButton.groupAccentColor.g,
+                                  panelButton.groupAccentColor.b,
+                                  0.16
+                              )
+                          )
                 }
             }
         }
@@ -1495,20 +2072,116 @@ ApplicationWindow {
         ToolTip.timeout: 8000
         ToolTip.text: tip
 
-        contentItem: Text {
-            text:
-                panelButton.text
-            color:
-                panelButton.enabled
-                ? "#f1f1f1"
-                : "#818181"
-            font.pixelSize:
-                panelButton.textPixelSize
-            font.bold: true
-            horizontalAlignment:
-                Text.AlignHCenter
-            verticalAlignment:
-                Text.AlignVCenter
+        contentItem: Item {
+            anchors.fill: parent
+
+            Text {
+                anchors.fill: parent
+                visible: panelButton.iconName.length === 0
+                text: panelButton.text
+                color: panelButton.enabled ? "#f1f1f1" : "#818181"
+                font.pixelSize: panelButton.textPixelSize
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            Canvas {
+                anchors.centerIn: parent
+                width: 23
+                height: 23
+                visible: panelButton.iconName === "browser"
+                antialiasing: true
+                property color iconColor:
+                    panelButton.enabled ? "#f1f1f1" : "#818181"
+                onIconColorChanged: requestPaint()
+                onVisibleChanged: requestPaint()
+                onPaint: {
+                    const ctx = getContext("2d")
+                    const color = iconColor
+                    ctx.reset()
+                    ctx.strokeStyle = color
+                    ctx.lineWidth = 1.8
+                    ctx.lineCap = "round"
+                    ctx.beginPath()
+                    ctx.arc(11.5, 11.5, 9.2, 0, Math.PI * 2)
+                    ctx.stroke()
+                    ctx.beginPath()
+                    ctx.ellipse(11.5, 11.5, 4.1, 9.2, 0, 0, Math.PI * 2)
+                    ctx.stroke()
+                    ctx.beginPath()
+                    ctx.moveTo(2.8, 11.5)
+                    ctx.lineTo(20.2, 11.5)
+                    ctx.stroke()
+                }
+                Component.onCompleted: requestPaint()
+            }
+        }
+    }
+
+    component SidePanelGroup: Rectangle {
+        id: sidePanelGroup
+
+        default property alias controls: sidePanelControls.data
+        property string caption: "GRUPO"
+        property color accentColor: "#5f8799"
+
+        function applyAccent(item) {
+            if (!item)
+                return
+            if (typeof item.groupAccentColor !== "undefined")
+                item.groupAccentColor = accentColor
+            if (typeof item.children === "undefined")
+                return
+            for (let index = 0; index < item.children.length; ++index)
+                applyAccent(item.children[index])
+        }
+
+        Component.onCompleted:
+            Qt.callLater(function() {
+                sidePanelGroup.applyAccent(sidePanelControls)
+            })
+
+        onAccentColorChanged:
+            Qt.callLater(function() {
+                sidePanelGroup.applyAccent(sidePanelControls)
+            })
+
+        Layout.fillWidth: true
+        implicitHeight: sidePanelContent.implicitHeight + 6
+        radius: 5
+        color: "#22272a"
+        border.color: Qt.darker(sidePanelGroup.accentColor, 1.08)
+        border.width: 1
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.margins: 1
+            width: 3
+            radius: 2
+            color: sidePanelGroup.accentColor
+            opacity: 0.85
+        }
+
+        ColumnLayout {
+            id: sidePanelContent
+            anchors.fill: parent
+            anchors.margins: 3
+            spacing: 3
+
+            PanelGroupHeader {
+                Layout.fillWidth: true
+                caption: sidePanelGroup.caption
+                accentColor: sidePanelGroup.accentColor
+            }
+
+            ColumnLayout {
+                id: sidePanelControls
+                Layout.fillWidth: true
+                spacing: 3
+            }
         }
     }
 
@@ -1683,6 +2356,151 @@ ApplicationWindow {
                 horizontalAlignment:
                     Text.AlignRight
             }
+        }
+    }
+
+    component AnalogSMeter: Rectangle {
+        id: analogMeter
+
+        property real meterPercent: 0
+        property string valueText: "S0"
+        property real displayedPercent:
+            Math.max(0, Math.min(100, meterPercent))
+
+        implicitWidth: 190
+        implicitHeight: 104
+        radius: 5
+        color: "#e5dfcc"
+        border.color: "#7d7562"
+        border.width: 2
+
+        Behavior on displayedPercent {
+            NumberAnimation {
+                duration: 70
+                easing.type: Easing.OutQuad
+            }
+        }
+
+        onDisplayedPercentChanged: meterCanvas.requestPaint()
+
+        Canvas {
+            id: meterCanvas
+            anchors.fill: parent
+            anchors.margins: 4
+            antialiasing: true
+
+            Component.onCompleted: requestPaint()
+
+            onPaint: {
+                const ctx = getContext("2d")
+                const w = width
+                const h = height
+                const cx = w / 2
+                const cy = h * 0.92
+                const radius = Math.min(w * 0.45, h * 0.82)
+                const start = -Math.PI * 0.84
+                const end = -Math.PI * 0.16
+                const marks = [
+                    { p: 0.00, t: "1" },
+                    { p: 0.16, t: "3" },
+                    { p: 0.32, t: "5" },
+                    { p: 0.48, t: "7" },
+                    { p: 0.62, t: "9" },
+                    { p: 0.75, t: "+20" },
+                    { p: 0.88, t: "+40" },
+                    { p: 1.00, t: "+60" }
+                ]
+
+                ctx.reset()
+                ctx.clearRect(0, 0, w, h)
+                ctx.lineCap = "round"
+                ctx.strokeStyle = "#292b29"
+                ctx.lineWidth = 1.3
+                ctx.beginPath()
+                ctx.arc(cx, cy, radius, start, end)
+                ctx.stroke()
+
+                ctx.strokeStyle = "#b52925"
+                ctx.lineWidth = 2.2
+                ctx.beginPath()
+                ctx.arc(cx, cy, radius,
+                        start + (end - start) * 0.62, end)
+                ctx.stroke()
+
+                ctx.font = "bold 8px DejaVu Sans"
+                ctx.textAlign = "center"
+                ctx.textBaseline = "middle"
+                for (let index = 0; index < marks.length; ++index) {
+                    const mark = marks[index]
+                    const angle = start + (end - start) * mark.p
+                    const inner = radius - (mark.p >= 0.62 ? 9 : 7)
+                    const labelRadius = radius - 18
+                    ctx.strokeStyle = mark.p >= 0.62
+                                      ? "#a32121" : "#252725"
+                    ctx.lineWidth = mark.p >= 0.62 ? 1.5 : 1.0
+                    ctx.beginPath()
+                    ctx.moveTo(cx + Math.cos(angle) * inner,
+                               cy + Math.sin(angle) * inner)
+                    ctx.lineTo(cx + Math.cos(angle) * radius,
+                               cy + Math.sin(angle) * radius)
+                    ctx.stroke()
+                    ctx.fillStyle = ctx.strokeStyle
+                    ctx.fillText(mark.t,
+                                 cx + Math.cos(angle) * labelRadius,
+                                 cy + Math.sin(angle) * labelRadius)
+                }
+
+                ctx.fillStyle = "#252725"
+                ctx.font = "bold 9px DejaVu Sans"
+                ctx.fillText("S", cx - 10, 14)
+                ctx.fillStyle = "#a32121"
+                ctx.fillText("dB", cx + 10, 14)
+
+                const needleAngle = start + (end - start)
+                    * analogMeter.displayedPercent / 100
+                ctx.strokeStyle = "#d32020"
+                ctx.lineWidth = 2
+                ctx.beginPath()
+                ctx.moveTo(cx, cy)
+                ctx.lineTo(
+                    cx + Math.cos(needleAngle) * (radius - 4),
+                    cy + Math.sin(needleAngle) * (radius - 4)
+                )
+                ctx.stroke()
+                ctx.fillStyle = "#202020"
+                ctx.beginPath()
+                ctx.arc(cx, cy, 5, 0, Math.PI * 2)
+                ctx.fill()
+            }
+        }
+
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 3
+            width: analogValue.implicitWidth + 12
+            height: 17
+            radius: 3
+            color: "#252a28"
+
+            Text {
+                id: analogValue
+                anchors.centerIn: parent
+                text: analogMeter.valueText
+                color: "#f2d16b"
+                font.pixelSize: 10
+                font.bold: true
+            }
+        }
+
+        ToolTip.visible: analogHover.hovered
+        ToolTip.delay: 450
+        ToolTip.timeout: 8000
+        ToolTip.text:
+            "S-meter analógico con la lectura CI-V de señal recibida."
+
+        HoverHandler {
+            id: analogHover
         }
     }
 
@@ -5097,6 +5915,46 @@ ApplicationWindow {
 
                     FrameBox {
                         Layout.fillWidth: true
+                        Layout.preferredHeight: 72
+                        color: "#20191a"
+                        raised: true
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 9
+                            spacing: 10
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: "PROTECCIÓN TX DEL PROGRAMA"
+                                    color: "#ffc2b8"
+                                    font.pixelSize: 10
+                                    font.bold: true
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Corta TX si SWR > 2,5 o al vencer el tiempo máximo. Solo afecta al PTT iniciado desde este programa."
+                                    color: "#b9c1c5"
+                                    font.pixelSize: 9
+                                    wrapMode: Text.Wrap
+                                }
+                            }
+                            Text { text: "Tiempo máximo"; color: "#d9e0e4"; font.pixelSize: 10 }
+                            SpinBox {
+                                from: 5
+                                to: 3600
+                                stepSize: 5
+                                editable: true
+                                value: radioController.txSafetyTimeoutSeconds
+                                Layout.preferredWidth: 110
+                                onValueModified: radioController.txSafetyTimeoutSeconds = value
+                            }
+                            Text { text: "s"; color: "#d9e0e4" }
+                        }
+                    }
+
+                    FrameBox {
+                        Layout.fillWidth: true
                         Layout.preferredHeight: 92
                         color: "#17191b"
                         raised: true
@@ -5361,6 +6219,597 @@ ApplicationWindow {
     }
 
     Window {
+        id: superCompactWindow
+
+        property bool returningToCompact: false
+
+        visible: superCompactVisible
+        width: 330
+        height: 64
+        minimumWidth: 240
+        minimumHeight: 52
+        // Qt.Window hace que SUPER tenga su propia entrada en la barra de
+        // tareas; Qt.Tool la ocultaba del selector de ventanas.
+        flags: Qt.Window | Qt.FramelessWindowHint
+               | (applicationLauncher.compactAlwaysOnTop
+                  ? Qt.WindowStaysOnTopHint : 0)
+        color: "#071014"
+        title: "IC-7300MK2"
+
+        onXChanged: {
+            if (visible)
+                applicationLauncher.superWindowX = Math.round(x)
+        }
+        onYChanged: {
+            if (visible)
+                applicationLauncher.superWindowY = Math.round(y)
+        }
+
+        onClosing: function(close) {
+            if (returningToCompact) {
+                returningToCompact = false
+                return
+            }
+            if (!applicationClosing && !returningToCompact) {
+                close.accepted = false
+                setSuperCompactMode(false)
+            }
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 2
+            color: "#071014"
+            border.color: "#347e98"
+            radius: 4
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 5
+                spacing: 8
+
+                Text {
+                    Layout.fillWidth: true
+                    text: radioController.frequencyMhzText
+                    color: "#77dcff"
+                    font.family: "DejaVu Sans Mono"
+                    font.pixelSize: 25
+                    font.bold: true
+                    horizontalAlignment: Text.AlignRight
+                    verticalAlignment: Text.AlignVCenter
+                }
+                Text {
+                    text: radioController.modeText
+                          + (radioController.dataMode ? "-D" : "")
+                    color: "#ffd27a"
+                    font.pixelSize: 20
+                    font.bold: true
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: setCompactMode(true)
+            }
+        }
+    }
+
+    Window {
+        id: compactWindow
+
+        property bool returningToFullView: false
+        property bool adjustingSize: false
+        readonly property real baseWidth: 700
+        readonly property real baseHeight: 112
+        readonly property real baseAspect: baseWidth / baseHeight
+
+        visible: compactVisible
+        width: baseWidth
+        height: baseHeight
+        minimumWidth: baseWidth
+        minimumHeight: baseHeight
+        flags: Qt.Tool | Qt.FramelessWindowHint
+               | (applicationLauncher.compactAlwaysOnTop
+                  ? Qt.WindowStaysOnTopHint : 0)
+        color: "#292d30"
+        title: "IC-7300MK2 · Control compacto"
+
+        onXChanged: {
+            if (visible)
+                applicationLauncher.compactWindowX = Math.round(x)
+        }
+        onYChanged: {
+            if (visible)
+                applicationLauncher.compactWindowY = Math.round(y)
+        }
+        onWidthChanged: {
+            if (adjustingSize) return
+            adjustingSize = true
+            if (width < baseWidth) width = baseWidth
+            height = Math.round(width / baseAspect)
+            adjustingSize = false
+            if (visible)
+                applicationLauncher.compactWindowWidth = Math.round(width)
+        }
+        onHeightChanged: {
+            if (adjustingSize) return
+            adjustingSize = true
+            // El alto nunca gobierna el tamaño: se deriva siempre del ancho.
+            // Esto impide cualquier escalado vertical independiente.
+            height = Math.round(width / baseAspect)
+            adjustingSize = false
+        }
+
+        onClosing: function(close) {
+            if (returningToFullView) {
+                returningToFullView = false
+                return
+            }
+            if (!applicationClosing && !returningToFullView) {
+                compactVisible = false
+                applicationLauncher.compactModePreferred = false
+                Qt.callLater(function() {
+                    window.showNormal()
+                    window.raise()
+                    window.requestActivate()
+                })
+            }
+        }
+
+        Rectangle {
+            width: compactWindow.baseWidth - 8
+            height: compactWindow.baseHeight - 8
+            anchors.centerIn: parent
+            scale: compactWindow.width / compactWindow.baseWidth
+            transformOrigin: Item.Center
+            color: "#303438"
+            border.color: "#5886ad"
+            radius: 4
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 7
+                spacing: 5
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 32
+                    spacing: 6
+
+                    Text {
+                        text: "⠿"
+                        color: "#8fa7b5"
+                        font.pixelSize: 18
+                        ToolTip.visible: compactDragArea.containsMouse
+                        ToolTip.text: "Arrastra para mover"
+                        MouseArea {
+                            id: compactDragArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onPressed: compactWindow.startSystemMove()
+                        }
+                    }
+
+                    PanelButton {
+                        text: "⚑"
+                        selected: applicationLauncher.compactAlwaysOnTop
+                        activeColor: "#75612e"
+                        Layout.preferredWidth: 42
+                        textPixelSize: 16
+                        tip: "Activa o desactiva que la ventana permanezca siempre visible."
+                        onClicked: {
+                            applicationLauncher.compactAlwaysOnTop =
+                                !applicationLauncher.compactAlwaysOnTop
+                            Qt.callLater(function() {
+                                compactWindow.show()
+                                compactWindow.raise()
+                                compactWindow.requestActivate()
+                            })
+                        }
+                    }
+
+                    PanelButton {
+                        text: "⏻"
+                        selected: radioController.connected || applicationLauncher.lanConnected
+                        activeColor: "#397a52"
+                        Layout.preferredWidth: 38
+                        textPixelSize: 17
+                        contentItem: Text {
+                            anchors.fill: parent
+                            text: "⏻"
+                            color: "#f1f1f1"
+                            font.pixelSize: 17
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        tip: (radioController.connected || applicationLauncher.lanConnected)
+                             ? "Desconectar de la radio"
+                             : "Conectar con la radio"
+                        onClicked: (radioController.connected || applicationLauncher.lanConnected)
+                                   ? (radioController.connected ? radioController.disconnectRadio() : applicationLauncher.disconnectLanConnection())
+                                   : (applicationLauncher.lanConnectionEnabled
+                                      ? applicationLauncher.testLanConnection()
+                                      : radioController.connectRadio())
+                    }
+                    PanelButton {
+                        text: ""
+                        iconName: "browser"
+                        Layout.preferredWidth: 38
+                        tip: "Abrir el panel remoto en el navegador"
+                        onClicked: {
+                            if ((!remoteServer.running && !remoteServer.start())) return
+                            Qt.openUrlExternally(remoteServer.localTestUrl)
+                        }
+                    }
+                    PanelButton {
+                        text: radioController.transmitting ? "RX" : "PTT"
+                        selected: radioController.transmitting
+                        activeColor: "#a33d3d"
+                        enabled: radioController.connected
+                                 && (!radioController.transmitting
+                                     || radioController.pttOwned)
+                        Layout.preferredWidth: 54
+                        tip: "PTT momentáneo. Mantén pulsado para transmitir."
+                        onPressed: radioController.setTransmit(true)
+                        onReleased: radioController.setTransmit(false)
+                        onCanceled: radioController.setTransmit(false)
+                    }
+                    PanelButton {
+                        text: "TUNE"
+                        activeColor: "#8a6330"
+                        Layout.preferredWidth: 54
+                        enabled: controlsEnabled()
+                        tip: "Inicia el ciclo de ajuste del acoplador."
+                        onClicked: radioController.startTuner()
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 75
+                        Layout.preferredHeight: 28
+                        color: "#071014"
+                        border.color: "#347e98"
+                        radius: 3
+                        clip: true
+                        Text {
+                            anchors.centerIn: parent
+                            width: parent.width - 6
+                            text: radioController.frequencyMhzText
+                                  + "  " + radioController.modeText
+                                  + (radioController.dataMode ? "-D" : "")
+                            color: "#77dcff"
+                            font.family: "DejaVu Sans Mono"
+                            font.pixelSize: 15
+                            font.bold: true
+                            elide: Text.ElideLeft
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                    }
+                    RowLayout {
+                        spacing: 3
+                        PanelButton {
+                            text: "◈"
+                            selected: superCompactVisible
+                            activeColor: "#61517d"
+                            Layout.preferredWidth: 48
+                            textPixelSize: 13
+                            onClicked: setSuperCompactMode(true)
+                            tip: "Vista SUPER compacta"
+                        }
+                        PanelButton {
+                            text: "□"
+                            Layout.preferredWidth: 70
+                            textPixelSize: 15
+                            activeColor: "#61517d"
+                            onClicked: setCompactMode(false)
+                            tip: "Vista completa"
+                        }
+                        PanelButton {
+                            text: "×"
+                            Layout.preferredWidth: 50
+                            textPixelSize: 17
+                            activeColor: "#8b3535"
+                            tip: "Cierra completamente el programa."
+                            onClicked: window.close()
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 54
+                    spacing: 8
+
+                GridLayout {
+                    // Los modos ocupan menos ancho para dejar más espacio
+                    // a las bandas, cuyos nombres necesitan más aire.
+                    Layout.preferredWidth: 225
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: 225
+                    Layout.fillHeight: true
+                    columns: 5
+                    rowSpacing: 3
+                    columnSpacing: 4
+
+                    Repeater {
+                        model: modeNames
+                        PanelButton {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredHeight: 24
+                            text: modelData
+                            textPixelSize: 9
+                            selected: modelData === "SSTV"
+                                      ? applicationLauncher.qsstvRunning
+                                      : modelData === "FT8/FT4"
+                                      ? applicationLauncher.decodiumRunning
+                                      : (modelData === "RTTY" || modelData === "RTTY-R")
+                                      ? (applicationLauncher.fldigiRunning
+                                         && externalDigitalMode === modelData)
+                                      : radioController.modeText === modelData
+                            activeColor: modelData === "SSTV" ? "#86652f"
+                                         : modelData === "FT8/FT4" ? "#28789a"
+                                         : "#2f72b9"
+                            enabled: controlsEnabled()
+                            onClicked: activateCompactMode(modelData)
+                        }
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.preferredWidth: 68
+                    Layout.minimumWidth: 0
+                    Layout.fillHeight: true
+                    spacing: 3
+
+                ComboBox {
+                    id: compactExtraDigitalModeBox
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    font.pixelSize: 9
+                    model: ["OTROS…", "PSK", "OLIVIA", "WEFAX", "JS8"]
+
+                    onActivated: function(index) {
+                        if (index === 0) return
+                        if (index === 1 || index === 2 || index === 3) {
+                            const targetMode = index === 1 ? "PSK" : index === 2 ? "OLIVIA" : "WEFAX"
+                            if (applicationLauncher.fldigiRunning
+                                    && externalDigitalMode === targetMode) {
+                                stopExternalProgramsAndRestore()
+                                return
+                            }
+                            prepareExternalProgram("fldigi")
+                            externalDigitalMode = targetMode
+                            radioController.setFrequency(String(index === 1
+                                ? applicationLauncher.pskFrequencyHz
+                                : index === 2 ? applicationLauncher.oliviaFrequencyHz
+                                : applicationLauncher.wefaxFrequencyHz))
+                            radioController.setOperatingModeState("USB", true, 1)
+                            applicationLauncher.launchFldigi()
+                            applicationLauncher.setFldigiMode(
+                                index === 1 ? "BPSK31" : index === 2 ? "OLIVIA-8/250" : "WEFAX576")
+                            applicationLauncher.setFldigiReverse(false)
+                        } else {
+                            if (applicationLauncher.js8callRunning) {
+                                stopExternalProgramsAndRestore()
+                                return
+                            }
+                            prepareExternalProgram("js8call")
+                            externalDigitalMode = "JS8"
+                            radioController.setFrequency(
+                                String(applicationLauncher.js8FrequencyHz))
+                            radioController.setOperatingModeState("USB", true, 1)
+                            applicationLauncher.launchJs8call()
+                        }
+                    }
+                }
+
+                PanelButton {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    text: "DATA"
+                    selected: applicationLauncher.lanConnected
+                              ? applicationLauncher.lanDataEnabled
+                              : radioController.dataMode
+                    activeColor: "#2d7894"
+                    textPixelSize: 9
+                    enabled: controlsEnabled()
+                    tip: "Activa o desactiva DATA en el modo actual."
+                    onClicked: applicationLauncher.lanConnected
+                               ? applicationLauncher.setLanDataEnabled(
+                                     !applicationLauncher.lanDataEnabled,
+                                     radioController.modeText)
+                               : radioController.setDataEnabled(
+                                     !radioController.dataMode)
+                }
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumWidth: 0
+                    columns: 6
+                    rowSpacing: 3
+                    columnSpacing: 3
+                    Repeater {
+                        model: bandDefinitions
+                        PanelButton {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredHeight: 24
+                            text: modelData.name
+                            textPixelSize: 10
+                            selected: currentBandName === modelData.name
+                            activeColor: "#386d84"
+                            enabled: controlsEnabled()
+                            tip: modelData.label
+                            onClicked: selectBand(index)
+                        }
+                    }
+                }
+                }
+            }
+        }
+
+        Rectangle {
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            width: 18
+            height: 18
+            color: resizeMouse.containsMouse ? "#52768a" : "#344750"
+            opacity: 0.9
+
+            Text {
+                anchors.centerIn: parent
+                text: "◢"
+                color: "#d6e7ef"
+                font.pixelSize: 12
+            }
+
+            MouseArea {
+                id: resizeMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.SizeFDiagCursor
+                onPressed: compactWindow.startSystemResize(
+                               Qt.RightEdge | Qt.BottomEdge)
+            }
+        }
+    }
+
+    Popup {
+        id: digitalFrequencyPopup
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: 430
+        height: 430
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape
+                     | Popup.CloseOnPressOutside
+
+        property string errorText: ""
+
+        function mhzText(frequencyHz) {
+            return (Number(frequencyHz) / 1000000).toFixed(6)
+        }
+
+        function frequencyHz(field) {
+            return Math.round(Number(field.text.replace(",", "."))
+                              * 1000000)
+        }
+
+        function syncFields() {
+            rttyFrequencyField.text = mhzText(applicationLauncher.rttyFrequencyHz)
+            cwFrequencyField.text = mhzText(applicationLauncher.cwFrequencyHz)
+            ftFrequencyField.text = mhzText(applicationLauncher.ftFrequencyHz)
+            sstvFrequencyField.text = mhzText(applicationLauncher.sstvFrequencyHz)
+            pskFrequencyField.text = mhzText(applicationLauncher.pskFrequencyHz)
+            oliviaFrequencyField.text = mhzText(applicationLauncher.oliviaFrequencyHz)
+            js8FrequencyField.text = mhzText(applicationLauncher.js8FrequencyHz)
+            wefaxFrequencyField.text = mhzText(applicationLauncher.wefaxFrequencyHz)
+            errorText = ""
+        }
+
+        function applyFields() {
+            const rtty = frequencyHz(rttyFrequencyField)
+            const cw = frequencyHz(cwFrequencyField)
+            const ft = frequencyHz(ftFrequencyField)
+            const sstv = frequencyHz(sstvFrequencyField)
+            const psk = frequencyHz(pskFrequencyField)
+            const olivia = frequencyHz(oliviaFrequencyField)
+            const js8 = frequencyHz(js8FrequencyField)
+            const wefax = frequencyHz(wefaxFrequencyField)
+            if (![rtty, cw, ft, sstv, psk, olivia, js8, wefax].every(function(value) {
+                    return isFinite(value) && value >= 100000
+                           && value <= 60000000
+                })) {
+                errorText = "Introduce frecuencias entre 0,100 y 60,000 MHz."
+                return
+            }
+            applicationLauncher.rttyFrequencyHz = rtty
+            applicationLauncher.cwFrequencyHz = cw
+            applicationLauncher.ftFrequencyHz = ft
+            applicationLauncher.sstvFrequencyHz = sstv
+            applicationLauncher.pskFrequencyHz = psk
+            applicationLauncher.oliviaFrequencyHz = olivia
+            applicationLauncher.js8FrequencyHz = js8
+            applicationLauncher.wefaxFrequencyHz = wefax
+            close()
+        }
+
+        onOpened: syncFields()
+
+        background: Rectangle {
+            color: "#202326"
+            border.color: "#e5bb52"
+            border.width: 1
+            radius: 4
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Text {
+                Layout.fillWidth: true
+                text: "FRECUENCIAS DE MODOS DIGITALES"
+                color: "#fff0bd"
+                font.pixelSize: 14
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 3
+                rowSpacing: 8
+                columnSpacing: 8
+
+                Text { text: "RTTY / RTTY-R"; color: "#d9e0e4" }
+                TextField { id: rttyFrequencyField; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                Text { text: "MHz"; color: "#aeb8bd" }
+                Text { text: "CW / CW-R"; color: "#d9e0e4" }
+                TextField { id: cwFrequencyField; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                Text { text: "MHz"; color: "#aeb8bd" }
+                Text { text: "FT8 / FT4"; color: "#d9e0e4" }
+                TextField { id: ftFrequencyField; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                Text { text: "MHz"; color: "#aeb8bd" }
+                Text { text: "SSTV"; color: "#d9e0e4" }
+                TextField { id: sstvFrequencyField; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                Text { text: "MHz"; color: "#aeb8bd" }
+                Text { text: "PSK"; color: "#d9e0e4" }
+                TextField { id: pskFrequencyField; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                Text { text: "MHz"; color: "#aeb8bd" }
+                Text { text: "Olivia"; color: "#d9e0e4" }
+                TextField { id: oliviaFrequencyField; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                Text { text: "MHz"; color: "#aeb8bd" }
+                Text { text: "JS8"; color: "#d9e0e4" }
+                TextField { id: js8FrequencyField; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                Text { text: "MHz"; color: "#aeb8bd" }
+                Text { text: "WEFAX"; color: "#d9e0e4" }
+                TextField { id: wefaxFrequencyField; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                Text { text: "MHz"; color: "#aeb8bd" }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: digitalFrequencyPopup.errorText
+                color: "#f0a0a0"
+                font.pixelSize: 10
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                PanelButton { text: "CANCELAR"; Layout.preferredWidth: 110; onClicked: digitalFrequencyPopup.close() }
+                PanelButton { text: "GUARDAR"; Layout.preferredWidth: 110; activeColor: "#3d7650"; onClicked: digitalFrequencyPopup.applyFields() }
+            }
+        }
+    }
+
+    Window {
         id: settingsPopup
 
         property int sectionIndex: 0
@@ -5368,9 +6817,9 @@ ApplicationWindow {
         transientParent: window
         visible: settingsVisible
         width: 940
-        height: 660
+        height: 760
         minimumWidth: 820
-        minimumHeight: 560
+        minimumHeight: 640
         flags: Qt.Tool
         color: "#202326"
         title: "Configuración avanzada · IC-7300MK2"
@@ -5413,6 +6862,10 @@ ApplicationWindow {
             connectionPortBox.currentIndex =
                 portIndex >= 0 ? portIndex : 0
 
+            lanHostField.text = applicationLauncher.lanHost
+            lanUserField.text = applicationLauncher.lanUser
+            lanPasswordField.text = applicationLauncher.lanPassword
+
             let baudIndex =
                 modelIndex(
                     connectionBaudBox.model,
@@ -5444,6 +6897,10 @@ ApplicationWindow {
         }
 
         function applyConnectionForm() {
+            applicationLauncher.lanHost = lanHostField.text
+            applicationLauncher.lanUser = lanUserField.text
+            applicationLauncher.lanPassword = lanPasswordField.text
+            applicationLauncher.lanConnectionEnabled = connectionTypeBox.currentIndex === 1
             const radioAddress =
                 parseInt(
                     radioAddressField.text,
@@ -5700,9 +7157,11 @@ ApplicationWindow {
                                             Text {
                                                 Layout.fillWidth: true
                                                 text:
-                                                    radioController.status
+                                                    applicationLauncher.lanConnected
+                                                    ? "Conectado - Recepción (LAN)"
+                                                    : radioController.status
                                                 color:
-                                                    radioController.connected
+                                                    (radioController.connected || applicationLauncher.lanConnected)
                                                     ? "#8de29a"
                                                     : "#e6a0a0"
                                                 font.pixelSize: 12
@@ -5713,9 +7172,14 @@ ApplicationWindow {
                                             Text {
                                                 Layout.fillWidth: true
                                                 text:
-                                                    radioController
-                                                    .connectionSettingsSummary
-                                                color: "#95cde4"
+                                                    ((applicationLauncher.lanConnected
+                                                      ? "LAN conectado"
+                                                      : (applicationLauncher.lanConnectionEnabled
+                                                         ? "LAN IC-7300MK2"
+                                                         : "USB / CI-V")))
+                                                    + " · " + radioController.connectionSettingsSummary
+                                                color: (radioController.connected || applicationLauncher.lanConnected)
+                                                       ? "#8de29a" : "#e6a0a0"
                                                 font.pixelSize: 9
                                                 elide: Text.ElideMiddle
                                             }
@@ -5724,26 +7188,26 @@ ApplicationWindow {
                                         PanelButton {
                                             Layout.preferredWidth: 116
                                             text:
-                                                radioController.connected
+                                                (radioController.connected || applicationLauncher.lanConnected)
                                                 ? "DESCONECTAR"
                                                 : "CONECTAR"
                                             selected:
-                                                radioController.connected
+                                                (radioController.connected || applicationLauncher.lanConnected)
                                             activeColor: "#3d7650"
 
                                             onClicked:
-                                                radioController.connected
-                                                ? radioController
-                                                  .disconnectRadio()
-                                                : radioController
-                                                  .connectRadio()
+                                                (radioController.connected || applicationLauncher.lanConnected)
+                                                ? (radioController.connected ? radioController.disconnectRadio() : applicationLauncher.disconnectLanConnection())
+                                                : (applicationLauncher.lanConnectionEnabled
+                                                   ? applicationLauncher.testLanConnection()
+                                                   : radioController.connectRadio())
                                         }
                                     }
                                 }
 
                                 FrameBox {
                                     Layout.fillWidth: true
-                                    Layout.preferredHeight: 244
+                                    Layout.preferredHeight: 390
                                     color: "#171a1c"
 
                                     GridLayout {
@@ -5752,6 +7216,35 @@ ApplicationWindow {
                                         columns: 4
                                         rowSpacing: 7
                                         columnSpacing: 8
+
+                                        Text {
+                                            text: "Conexión"
+                                            color: "#d9e0e4"
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                        }
+                                        ComboBox {
+                                            id: connectionTypeBox
+                                            Layout.columnSpan: 3
+                                            Layout.fillWidth: true
+                                            model: ["USB / CI-V", "LAN IC-7300MK2"]
+                                            currentIndex: applicationLauncher.lanConnectionEnabled ? 1 : 0
+                                            onCurrentIndexChanged: {
+                                                const useLan = currentIndex === 1
+                                                applicationLauncher.lanConnectionEnabled = useLan
+                                                if (useLan && radioController.connected)
+                                                    radioController.disconnectRadio()
+                                            }
+                                            onActivated: {
+                                                applicationLauncher.lanConnectionEnabled = currentIndex === 1
+                                            }
+                                            onCurrentTextChanged: {
+                                                if (currentText.length > 0)
+                                                    applicationLauncher.lanConnectionEnabled = currentIndex === 1
+                                            }
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: "Selecciona el transporte de comunicación. LAN quedará activo al completar el controlador LAN."
+                                        }
 
                                         Text {
                                             text: "Puerto"
@@ -5764,6 +7257,7 @@ ApplicationWindow {
                                             id: connectionPortBox
                                             Layout.columnSpan: 3
                                             Layout.fillWidth: true
+                                            enabled: connectionTypeBox.currentIndex === 0
                                             model:
                                                 radioController
                                                 .serialPortChoices
@@ -5775,6 +7269,21 @@ ApplicationWindow {
                                                 : "Puerto serie seleccionado manualmente."
                                         }
 
+                                        Text { text: "LAN IP / host"; color: "#d9e0e4"; font.pixelSize: 10; font.bold: true }
+                                        TextField { id: lanHostField; Layout.columnSpan: 3; Layout.fillWidth: true; enabled: connectionTypeBox.currentIndex === 1; placeholderText: "192.168.1.154 o nombre DHCP" }
+                                        Text { text: "Usuario LAN"; color: "#d9e0e4"; font.pixelSize: 10; font.bold: true }
+                                        TextField { id: lanUserField; Layout.columnSpan: 3; Layout.fillWidth: true; enabled: connectionTypeBox.currentIndex === 1 }
+                                        Text { text: "Contraseña LAN"; color: "#d9e0e4"; font.pixelSize: 10; font.bold: true }
+                                        RowLayout {
+                                            Layout.columnSpan: 3
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            TextField { id: lanPasswordField; Layout.fillWidth: true; enabled: connectionTypeBox.currentIndex === 1; echoMode: lanPasswordVisible.checked ? TextInput.Normal : TextInput.Password }
+                                            CheckBox { id: lanPasswordVisible; text: "Mostrar"; enabled: connectionTypeBox.currentIndex === 1; font.pixelSize: 10; palette.text: "#d9e0e4" }
+                                        }
+                                        Item { Layout.columnSpan: 1 }
+                                        PanelButton { text: "CONECTAR LAN"; Layout.columnSpan: 3; Layout.fillWidth: true; enabled: connectionTypeBox.currentIndex === 1; onClicked: applicationLauncher.testLanConnection() }
+
                                         Text {
                                             text: "Velocidad"
                                             color: "#d9e0e4"
@@ -5785,6 +7294,7 @@ ApplicationWindow {
                                         ComboBox {
                                             id: connectionBaudBox
                                             Layout.preferredWidth: 130
+                                            enabled: connectionTypeBox.currentIndex === 0
                                             model: [
                                                 "9600",
                                                 "19200",
@@ -5803,6 +7313,7 @@ ApplicationWindow {
 
                                         TextField {
                                             id: radioAddressField
+                                            enabled: connectionTypeBox.currentIndex === 0
                                             Layout.preferredWidth: 84
                                             horizontalAlignment:
                                                 Text.AlignHCenter
@@ -5822,6 +7333,7 @@ ApplicationWindow {
 
                                         TextField {
                                             id: controllerAddressField
+                                            enabled: connectionTypeBox.currentIndex === 0
                                             Layout.preferredWidth: 84
                                             horizontalAlignment:
                                                 Text.AlignHCenter
@@ -5867,17 +7379,51 @@ ApplicationWindow {
                                         CheckBox {
                                             id: connectionAutoCheck
                                             Layout.columnSpan: 2
-                                            text:
-                                                "Conectar automáticamente al iniciar"
+                                            Layout.fillWidth: true
+                                            text: "Auto-conectar al iniciar"
                                             font.pixelSize: 10
+                                            palette.text: "#d9e0e4"
+                                            indicator: Rectangle {
+                                                implicitWidth: 16; implicitHeight: 16
+                                                x: 0; y: (parent.height - height) / 2
+                                                color: "#050505"; border.color: "#8aa0aa"; radius: 2
+                                                Text { anchors.centerIn: parent; text: "✓"; visible: connectionAutoCheck.checked; color: "#ffffff"; font.pixelSize: 13; font.bold: true }
+                                            }
+                                            contentItem: Text {
+                                                text: connectionAutoCheck.text
+                                                color: "#d9e0e4"
+                                                font.pixelSize: 12
+                                                anchors.left: parent.left
+                                                anchors.leftMargin: 30
+                                                leftPadding: 0
+                                                verticalAlignment: Text.AlignVCenter
+                                            }
+                                            onToggled: radioController.setAutoConnectPreference(checked)
                                         }
 
                                         CheckBox {
                                             id: connectionReconnectCheck
                                             Layout.columnSpan: 2
-                                            text:
-                                                "Reconectar tras error del puerto"
+                                            Layout.fillWidth: true
+                                            text: "Reconectar tras error"
                                             font.pixelSize: 10
+                                            palette.text: "#d9e0e4"
+                                            indicator: Rectangle {
+                                                implicitWidth: 16; implicitHeight: 16
+                                                x: 0; y: (parent.height - height) / 2
+                                                color: "#050505"; border.color: "#8aa0aa"; radius: 2
+                                                Text { anchors.centerIn: parent; text: "✓"; visible: connectionReconnectCheck.checked; color: "#ffffff"; font.pixelSize: 13; font.bold: true }
+                                            }
+                                            contentItem: Text {
+                                                text: connectionReconnectCheck.text
+                                                color: "#d9e0e4"
+                                                font.pixelSize: 12
+                                                anchors.left: parent.left
+                                                anchors.leftMargin: 30
+                                                leftPadding: 0
+                                                verticalAlignment: Text.AlignVCenter
+                                            }
+                                            onToggled: radioController.setAutoReconnectPreference(checked)
                                         }
 
                                         Text {
@@ -5947,6 +7493,47 @@ ApplicationWindow {
                                     color: "#d6dde1"
                                     font.pixelSize: 10
                                     wrapMode: Text.Wrap
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "LAN: " + applicationLauncher.status
+                                    color: "#8fd3ed"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.Wrap
+                                    visible: applicationLauncher.status.length > 0
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    TextArea {
+                                        id: lanLogArea
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 130
+                                        readOnly: true
+                                        selectByMouse: true
+                                        wrapMode: TextEdit.Wrap
+                                        text: lanLogText
+                                        onTextChanged: Qt.callLater(function() { cursorPosition = text.length })
+                                        font.pixelSize: 11
+                                        color: "#b9e9f7"
+                                        background: Rectangle { color: "#0d1519"; border.color: "#345563"; radius: 2 }
+                                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOn }
+                                    }
+                                    PanelButton {
+                                        Layout.preferredWidth: 82
+                                        text: "COPIAR LOG"
+                                        onClicked: { lanLogArea.selectAll(); lanLogArea.copy(); lanLogArea.deselect() }
+                                    }
+                                    PanelButton {
+                                        Layout.preferredWidth: 82
+                                        text: "BORRAR LOG"
+                                        tip: "Borra el registro LAN mostrado en esta ventana."
+                                        onClicked: {
+                                            lanLogText = ""
+                                            lanLogArea.clear()
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -6068,11 +7655,15 @@ ApplicationWindow {
                                             PanelButton {
                                                 Layout.fillWidth: true
                                                 text:
-                                                    radioController.dataMode
-                                                    ? "DATA ON"
-                                                    : "DATA OFF"
+                                                    applicationLauncher.lanConnected
+                                                    ? (applicationLauncher.lanDataEnabled
+                                                       ? "DATA ON" : "DATA OFF")
+                                                    : (radioController.dataMode
+                                                       ? "DATA ON" : "DATA OFF")
                                                 selected:
-                                                    radioController.dataMode
+                                                    applicationLauncher.lanConnected
+                                                    ? applicationLauncher.lanDataEnabled
+                                                    : radioController.dataMode
                                                 activeColor: "#347a50"
                                                 enabled:
                                                     controlsEnabled()
@@ -6080,11 +7671,9 @@ ApplicationWindow {
                                                     "Activa o desactiva DATA en el VFO actual."
 
                                                 onClicked:
-                                                    radioController
-                                                    .setDataEnabled(
-                                                        !radioController
-                                                        .dataMode
-                                                    )
+                                                    applicationLauncher.lanConnected
+                                                    ? applicationLauncher.setLanDataEnabled(!applicationLauncher.lanDataEnabled, radioController.modeText)
+                                                    : radioController.setDataEnabled(!radioController.dataMode)
                                             }
 
                                             PanelButton {
@@ -6986,42 +8575,9 @@ ApplicationWindow {
             anchors.margins: 6
             spacing: 5
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 16
-
-                Text {
-                    text: "File"
-                    color: "#f2f2f2"
-                    font.pixelSize: 12
-                }
-
-                Text {
-                    text: "View"
-                    color: "#f2f2f2"
-                    font.pixelSize: 12
-                }
-
-                Text {
-                    text: "Option"
-                    color: "#f2f2f2"
-                    font.pixelSize: 12
-                }
-
-                Text {
-                    text: "Help"
-                    color: "#f2f2f2"
-                    font.pixelSize: 12
-                }
-
-                Item {
-                    Layout.fillWidth: true
-                }
-            }
-
             Rectangle {
                 Layout.fillWidth: true
-                implicitHeight: 56
+                implicitHeight: 72
                 color: "#4b4b4b"
                 border.color: "#707070"
 
@@ -7040,10 +8596,14 @@ ApplicationWindow {
                 RowLayout {
                     anchors.fill: parent
                     anchors.margins: 4
-                    spacing: 6
+                    spacing: 4
+
+                    ToolbarGroup {
+                        caption: "CONEXIÓN"
+                        accentColor: "#3d9fc4"
 
                     ToolbarButton {
-                        text: "Connect"
+                        text: "RADIO"
                         iconName: "connect"
                         iconColor:
                             radioController.connected
@@ -7075,7 +8635,44 @@ ApplicationWindow {
                     }
 
                     ToolbarButton {
-                        text: "Remote"
+                        text: "NAVEGADOR"
+                        iconName: "browser"
+                        iconColor:
+                            remoteServer.running
+                            ? "#67d8ff"
+                            : "#8f8f8f"
+                        tip:
+                            "Abre el panel remoto en el navegador de este equipo. "
+                            + "Si el servidor está detenido, lo inicia primero."
+
+                        onClicked: {
+                            if (!remoteServer.running
+                                    && !remoteServer.start())
+                                return
+                            Qt.openUrlExternally(
+                                remoteServer.localTestUrl
+                            )
+                        }
+                    }
+
+                    ToolbarButton {
+                        text: "COMPACTO"
+                        iconName: "settings"
+                        iconColor: compactVisible ? "#ffd36b" : "#8f8f8f"
+                        tip: "Abre la vista compacta para mantener los controles esenciales accesibles."
+                        onClicked: setCompactMode(true)
+                    }
+
+                    ToolbarButton {
+                        text: "SUPER"
+                        iconName: "settings"
+                        iconColor: superCompactVisible ? "#ffd36b" : "#8f8f8f"
+                        tip: "Muestra solo frecuencia y modo. Pulse esa ventana para volver al modo compacto."
+                        onClicked: setSuperCompactMode(true)
+                    }
+
+                    ToolbarButton {
+                        text: "DIAGNÓST."
                         iconName: "remote"
                         iconColor:
                             diagnosticsVisible
@@ -7088,8 +8685,17 @@ ApplicationWindow {
                             )
                     }
 
+                    }
+
+                    ToolbarGroup {
+                        Layout.fillWidth: true
+                        caption: "HERRAMIENTAS Y AJUSTES"
+                        accentColor: "#b68b45"
+
                     ToolbarButton {
-                        text: "ADV SET"
+                        text: "CI-V"
+                        Layout.preferredWidth: 45
+                        Layout.minimumWidth: 40
                         iconName: "settings"
                         iconColor:
                             settingsVisible
@@ -7104,6 +8710,8 @@ ApplicationWindow {
 
                     ToolbarButton {
                         text: "SCOPE"
+                        Layout.preferredWidth: 45
+                        Layout.minimumWidth: 40
                         iconName: "scope"
                         iconColor:
                             scopeVisible
@@ -7117,7 +8725,9 @@ ApplicationWindow {
                     }
 
                     ToolbarButton {
-                        text: "TX SET"
+                        text: "TX"
+                        Layout.preferredWidth: 45
+                        Layout.minimumWidth: 40
                         iconName: "tx"
                         iconColor:
                             txSettingsVisible
@@ -7131,7 +8741,9 @@ ApplicationWindow {
                     }
 
                     ToolbarButton {
-                        text: "CW SET"
+                        text: "CW"
+                        Layout.preferredWidth: 45
+                        Layout.minimumWidth: 40
                         iconName: "cw"
                         iconColor:
                             cwSettingsVisible
@@ -7146,6 +8758,8 @@ ApplicationWindow {
 
                     ToolbarButton {
                         text: "MORSE"
+                        Layout.preferredWidth: 45
+                        Layout.minimumWidth: 40
                         iconName: "morse"
                         iconColor:
                             morseTrainerVisible
@@ -7159,7 +8773,9 @@ ApplicationWindow {
                     }
 
                     ToolbarButton {
-                        text: "TONE/RTTY"
+                        text: "TONO/RTTY"
+                        Layout.preferredWidth: 45
+                        Layout.minimumWidth: 40
                         iconName: "toneRtty"
                         iconColor:
                             toneRttySettingsVisible
@@ -7172,8 +8788,14 @@ ApplicationWindow {
                             )
                     }
 
+                    }
+
+                    ToolbarGroup {
+                        caption: "MEMORIAS"
+                        accentColor: "#8e68b5"
+
                     ToolbarButton {
-                        text: "SCANNER"
+                        text: "ESCÁNER"
                         iconName: "memory"
                         iconColor:
                             scannerVisible
@@ -7187,7 +8809,7 @@ ApplicationWindow {
                     }
 
                     ToolbarButton {
-                        text: "MEMORY"
+                        text: "MEMORIA"
                         iconName: "memory"
                         iconColor:
                             memoryQuickPanelVisible
@@ -7197,6 +8819,12 @@ ApplicationWindow {
                         onClicked:
                             window.toggleMemoryQuickPanel()
                     }
+
+                    }
+
+                    ToolbarGroup {
+                        caption: "VFO"
+                        accentColor: "#559467"
 
                     ToolbarButton {
                         text: "VFO A"
@@ -7222,8 +8850,14 @@ ApplicationWindow {
                             radioController.selectVfoB()
                     }
 
+                    }
+
+                    ToolbarGroup {
+                        caption: "SISTEMA"
+                        accentColor: "#a65757"
+
                     ToolbarButton {
-                        text: "Exit"
+                        text: "SALIR"
                         iconName: "exit"
                         iconColor: "#ff7d78"
 
@@ -7231,11 +8865,14 @@ ApplicationWindow {
                             Qt.quit()
                     }
 
+                    }
+
                     Item {
-                        Layout.fillWidth: true
+                        Layout.preferredWidth: 2
                     }
 
                     Text {
+                        Layout.maximumWidth: 70
                         text:
                             radioController.portName
                         color: "#e6e6e6"
@@ -7253,9 +8890,9 @@ ApplicationWindow {
                 FrameBox {
                     id: leftOperatingPanel
 
-                    Layout.preferredWidth: 104
-                    Layout.minimumWidth: 104
-                    Layout.maximumWidth: 104
+                    Layout.preferredWidth: 118
+                    Layout.minimumWidth: 118
+                    Layout.maximumWidth: 118
                     Layout.fillHeight: true
                     color: "#2c2c2c"
 
@@ -7264,11 +8901,9 @@ ApplicationWindow {
                         anchors.margins: 6
                         spacing: 3
 
-                        PanelGroupHeader {
-                            Layout.fillWidth: true
+                        SidePanelGroup {
                             caption: "TX / TUNER"
                             accentColor: "#b86d64"
-                        }
 
                         Button {
                             id: ptt
@@ -7373,13 +9008,13 @@ text: "TUNE"
                                 .startTuner()
                         }
 
-                                                PanelGroupHeader {
-                            Layout.fillWidth: true
-                            caption: "FRONTAL RF"
-                            accentColor: "#6da184"
                         }
 
-PanelButton {
+                        SidePanelGroup {
+                            caption: "FRONTAL RF"
+                            accentColor: "#6da184"
+
+                        PanelButton {
                             Layout.fillWidth: true
                             textPixelSize: 12
                             text:
@@ -7440,13 +9075,13 @@ PanelButton {
                                 )
                         }
 
-                                                PanelGroupHeader {
-                            Layout.fillWidth: true
-                            caption: "DSP / RUIDO"
-                            accentColor: "#6f8fb5"
                         }
 
-PanelButton {
+                        SidePanelGroup {
+                            caption: "DSP / RUIDO"
+                            accentColor: "#6f8fb5"
+
+                        PanelButton {
                             Layout.fillWidth: true
                             
                             textPixelSize: 12
@@ -7541,11 +9176,11 @@ text: "IP+"
                                 )
                         }
 
-                        PanelGroupHeader {
-                            Layout.fillWidth: true
+                        }
+
+                        SidePanelGroup {
                             caption: "NIVELES RF"
                             accentColor: "#b99956"
-                        }
 
                         KnobControl {
                             Layout.fillWidth: true
@@ -7579,6 +9214,7 @@ text: "IP+"
                                 }
                         }
 
+                        }
 
                     }
                 }
@@ -7609,9 +9245,9 @@ text: "IP+"
                                 id: mainRadioDisplay
 
                                 Layout.fillWidth: true
-                                Layout.minimumHeight: 300
-                                Layout.preferredHeight: 300
-                                Layout.maximumHeight: 300
+                                Layout.minimumHeight: 340
+                                Layout.preferredHeight: 340
+                                Layout.maximumHeight: 340
                                 Layout.alignment: Qt.AlignTop
 
                                 color: "#020202"
@@ -7880,11 +9516,11 @@ text: "IP+"
                                                     }
 
                                                     GridLayout {
-                                                        Layout.preferredWidth: 348
-                                                        Layout.minimumWidth: 324
-                                                        Layout.maximumWidth: 356
+                                                        Layout.preferredWidth: 300
+                                                        Layout.minimumWidth: 280
+                                                        Layout.maximumWidth: 310
                                                         Layout.fillHeight: true
-                                                        columns: 4
+                                                        columns: 5
                                                         rowSpacing: 4
                                                         columnSpacing: 6
 
@@ -7899,10 +9535,23 @@ text: "IP+"
                                                                 text: modelData
                                                                 textPixelSize: 11
                                                                 selected:
-                                                                    radioController
-                                                                    .modeText
-                                                                    === modelData
-                                                                activeColor: "#2f72b9"
+                                                                    modelData === "SSTV"
+                                                                    ? applicationLauncher.qsstvRunning
+                                                                    : modelData === "FT8/FT4"
+                                                                    ? applicationLauncher.decodiumRunning
+                                                                    : (modelData === "RTTY"
+                                                                     || modelData === "RTTY-R")
+                                                                    ? (applicationLauncher
+                                                                       .fldigiRunning
+                                                                       && externalDigitalMode
+                                                                          === modelData)
+                                                                    : radioController
+                                                                      .modeText
+                                                                      === modelData
+                                                                activeColor:
+                                                                    modelData === "SSTV" ? "#86652f"
+                                                                    : modelData === "FT8/FT4" ? "#28789a"
+                                                                    : "#2f72b9"
                                                                 enabled:
                                                                     controlsEnabled()
                                                                 tip:
@@ -7910,12 +9559,150 @@ text: "IP+"
                                                                     + modelData
                                                                     + "."
 
-                                                                onClicked:
-                                                                    radioController
-                                                                    .setOperatingMode(
-                                                                        modelData
-                                                                    )
+                                                                onClicked: {
+                                                                    if (modelData === "SSTV") {
+                                                                        if (applicationLauncher.qsstvRunning) {
+                                                                            stopExternalProgramsAndRestore()
+                                                                            return
+                                                                        }
+                                                                        prepareExternalProgram("qsstv")
+                                                                        externalDigitalMode = "SSTV"
+                                                                        radioController.setFrequency(
+                                                                            String(applicationLauncher.sstvFrequencyHz))
+                                                                        radioController.setOperatingModeState(
+                                                                            "USB", true, 1)
+                                                                        applicationLauncher.launchQsstv()
+                                                                    } else if (modelData === "FT8/FT4") {
+                                                                        if (applicationLauncher.decodiumRunning) {
+                                                                            stopExternalProgramsAndRestore()
+                                                                            return
+                                                                        }
+                                                                        prepareExternalProgram("decodium")
+                                                                        externalDigitalMode = "FT8/FT4"
+                                                                        radioController.setFrequency(
+                                                                            String(applicationLauncher.ftFrequencyHz))
+                                                                        radioController.setOperatingModeState(
+                                                                            "USB", true, 1)
+                                                                        applicationLauncher.launchDecodium()
+                                                                    } else if (modelData === "RTTY"
+                                                                            || modelData === "RTTY-R") {
+                                                                        if (applicationLauncher.fldigiRunning
+                                                                                && externalDigitalMode === modelData) {
+                                                                            stopExternalProgramsAndRestore()
+                                                                            return
+                                                                        }
+                                                                        prepareExternalProgram("fldigi")
+                                                                        externalDigitalMode = modelData
+                                                                        radioController.setFrequency(
+                                                                            String(applicationLauncher.rttyFrequencyHz)
+                                                                        )
+                                                                        radioController
+                                                                        .setOperatingModeState(
+                                                                            "USB",
+                                                                            true,
+                                                                            1
+                                                                        )
+                                                                        applicationLauncher
+                                                                        .launchFldigi()
+                                                                        applicationLauncher
+                                                                        .setFldigiMode("RTTY")
+                                                                        applicationLauncher
+                                                                        .setFldigiReverse(
+                                                                            modelData === "RTTY-R")
+                                                                    } else {
+                                                                        if ((modelData === "CW"
+                                                                             || modelData === "CW-R")
+                                                                                && applicationLauncher.fldigiRunning
+                                                                                && radioController.modeText === modelData) {
+                                                                            stopExternalProgramsAndRestore()
+                                                                            return
+                                                                        }
+                                                                        if (applicationLauncher.decodiumRunning
+                                                                                || applicationLauncher.qsstvRunning
+                                                                                || applicationLauncher.js8callRunning)
+                                                                            stopExternalProgramsAndRestore()
+                                                                        if (modelData !== "CW"
+                                                                                && modelData !== "CW-R") {
+                                                                            stopExternalProgramsAndRestore()
+                                                                        }
+                                                                        externalDigitalMode = ""
+                                                                        if (modelData === "CW"
+                                                                                || modelData === "CW-R") {
+                                                                            radioController.setFrequency(
+                                                                                String(applicationLauncher.cwFrequencyHz)
+                                                                            )
+                                                                            if (applicationLauncher.fldigiRunning)
+                                                                                externalDigitalMode = modelData
+                                                                        }
+                                                                        if (applicationLauncher.lanConnected
+                                                                                && ["LSB","USB","AM","CW","RTTY","FM","CW-R","RTTY-R"].indexOf(modelData) >= 0)
+                                                                            applicationLauncher.testLanModeName(modelData)
+                                                                        else
+                                                                            radioController.setOperatingMode(modelData)
+                                                                    }
+                                                                }
                                                             }
+                                                        }
+                                                    }
+
+                                                    ColumnLayout {
+                                                        Layout.preferredWidth: 132
+                                                        Layout.minimumWidth: 126
+                                                        Layout.maximumWidth: 140
+                                                        Layout.fillHeight: true
+                                                        spacing: 4
+
+                                                        ComboBox {
+                                                            id: extraDigitalModeBox
+                                                            Layout.fillWidth: true
+                                                            Layout.preferredHeight: 24
+                                                            font.pixelSize: 10
+                                                            model: ["OTROS…", "PSK", "OLIVIA", "WEFAX", "JS8"]
+
+                                                            onActivated: function(index) {
+                                                                if (index === 0)
+                                                                    return
+                                                                if (index === 1 || index === 2 || index === 3) {
+                                                                    const targetMode = index === 1 ? "PSK" : index === 2 ? "OLIVIA" : "WEFAX"
+                                                                    if (applicationLauncher.fldigiRunning
+                                                                            && externalDigitalMode === targetMode) {
+                                                                        stopExternalProgramsAndRestore()
+                                                                        return
+                                                                    }
+                                                                    prepareExternalProgram("fldigi")
+                                                                    externalDigitalMode = targetMode
+                                                                    radioController.setFrequency(
+                                                                        String(index === 1
+                                                                               ? applicationLauncher.pskFrequencyHz
+                                                                               : index === 2 ? applicationLauncher.oliviaFrequencyHz
+                                                                               : applicationLauncher.wefaxFrequencyHz))
+                                                                    radioController.setOperatingModeState("USB", true, 1)
+                                                                    applicationLauncher.launchFldigi()
+                                                                    applicationLauncher.setFldigiMode(
+                                                                        index === 1 ? "BPSK31" : index === 2 ? "OLIVIA-8/250" : "WEFAX576")
+                                                                    applicationLauncher.setFldigiReverse(false)
+                                                                } else if (index === 4) {
+                                                                    if (applicationLauncher.js8callRunning) {
+                                                                        stopExternalProgramsAndRestore()
+                                                                        return
+                                                                    }
+                                                                    prepareExternalProgram("js8call")
+                                                                    externalDigitalMode = "JS8"
+                                                                    radioController.setFrequency(
+                                                                        String(applicationLauncher.js8FrequencyHz))
+                                                                    radioController.setOperatingModeState("USB", true, 1)
+                                                                    applicationLauncher.launchJs8call()
+                                                                }
+                                                            }
+                                                        }
+
+                                                        PanelButton {
+                                                            Layout.fillWidth: true
+                                                            Layout.preferredHeight: 24
+                                                            text: "FRECUENCIAS…"
+                                                            textPixelSize: 9
+                                                            activeColor: "#61517d"
+                                                            onClicked: digitalFrequencyPopup.open()
                                                         }
                                                     }
                                                 }
@@ -7972,7 +9759,11 @@ text: "IP+"
                                                 TextField {
                                                     id: mainFrequencyInput
 
-                                                    Layout.fillWidth: true
+                                                    // Mantener una caja compacta y dejar
+                                                    // al botón SET un tamaño cómodo.
+                                                    Layout.fillWidth: false
+                                                    Layout.preferredWidth: 190
+                                                    Layout.minimumWidth: 150
                                                     Layout.preferredHeight: 27
                                                     placeholderText:
                                                         "Frecuencia directa"
@@ -7994,6 +9785,8 @@ text: "IP+"
 
                                                 PanelButton {
                                                     text: "SET"
+                                                    Layout.preferredWidth: 62
+                                                    Layout.minimumWidth: 58
                                                     tip:
                                                         "Aplica la frecuencia escrita al VFO activo."
                                                     enabled:
@@ -8193,6 +9986,7 @@ text: "IP+"
 
                                         ColumnLayout {
                                             Layout.fillWidth: true
+                                            Layout.minimumWidth: 250
                                             spacing: 2
 
                                             RowLayout {
@@ -8282,8 +10076,26 @@ text: "IP+"
                                             }
                                         }
 
+                                        AnalogSMeter {
+                                            Layout.preferredWidth: 190
+                                            Layout.minimumWidth: 180
+                                            Layout.maximumWidth: 195
+                                            Layout.minimumHeight: 104
+                                            Layout.preferredHeight: 104
+                                            Layout.maximumHeight: 104
+                                            Layout.alignment:
+                                                Qt.AlignVCenter
+                                            meterPercent:
+                                                radioController
+                                                .sMeterPercent
+                                            valueText:
+                                                radioController
+                                                .sMeterText
+                                        }
+
                                         ColumnLayout {
-                                            Layout.preferredWidth: 150
+                                            Layout.preferredWidth: 120
+                                            Layout.minimumWidth: 110
                                             spacing: 3
 
                                             
@@ -8405,10 +10217,11 @@ text: "IP+"
                                                     controlsEnabled()
 
                                                 onClicked:
-                                                    radioController
-                                                    .setOperatingMode(
-                                                        modelData
-                                                    )
+                                                    if (applicationLauncher.lanConnected
+                                                            && ["LSB","USB","AM","CW","RTTY","FM","CW-R","RTTY-R"].indexOf(modelData) >= 0)
+                                                        applicationLauncher.testLanModeName(modelData)
+                                                    else
+                                                        radioController.setOperatingMode(modelData)
                                             }
                                         }
                                     }
@@ -8543,18 +10356,17 @@ text: "IP+"
                                                 Layout.fillWidth: true
                                                 text: "DATA"
                                                 selected:
-                                                    radioController
-                                                    .dataMode
+                                                    applicationLauncher.lanConnected
+                                                    ? applicationLauncher.lanDataEnabled
+                                                    : radioController.dataMode
                                                 activeColor: "#2d7a47"
                                                 enabled:
                                                     controlsEnabled()
 
                                                 onClicked:
-                                                    radioController
-                                                    .setDataEnabled(
-                                                        !radioController
-                                                        .dataMode
-                                                    )
+                                                    applicationLauncher.lanConnected
+                                                    ? applicationLauncher.setLanDataEnabled(!applicationLauncher.lanDataEnabled, radioController.modeText)
+                                                    : radioController.setDataEnabled(!radioController.dataMode)
                                             }
                                         }
 
@@ -9403,9 +11215,9 @@ text: "IP+"
                         FrameBox {
                             id: bandAudioPanel
 
-                            Layout.preferredWidth: 104
-                            Layout.minimumWidth: 104
-                            Layout.maximumWidth: 104
+                            Layout.preferredWidth: 118
+                            Layout.minimumWidth: 118
+                            Layout.maximumWidth: 118
                             Layout.fillHeight: true
                             color: "#2c2c2c"
 
@@ -9414,19 +11226,13 @@ text: "IP+"
                                 anchors.margins: 4
                                 spacing: 4
 
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: "BAND"
-                                    color: "#f0f0f0"
-                                    font.pixelSize: 13
-                                    font.bold: true
-                                    horizontalAlignment:
-                                        Text.AlignHCenter
-                                }
+                                SidePanelGroup {
+                                    caption: "BANDAS"
+                                    accentColor: "#4d9fc1"
 
-                                ColumnLayout {
+                                    ColumnLayout {
                                     Layout.fillWidth: true
-                                    spacing: 5
+                                    spacing: 3
 
                                     Repeater {
                                         model: bandDefinitions
@@ -9494,25 +11300,15 @@ text: "IP+"
                                     }
                                 }
 
+                                }
+
                                 Item {
                                     Layout.fillHeight: true
                                 }
 
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 1
-                                    color: "#555d61"
-                                }
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: "AUDIO / SQL"
-                                    color: "#dce3e6"
-                                    font.pixelSize: 10
-                                    font.bold: true
-                                    horizontalAlignment:
-                                        Text.AlignHCenter
-                                }
+                                SidePanelGroup {
+                                    caption: "AUDIO / SQL"
+                                    accentColor: "#55a996"
 
                                 KnobControl {
                                     Layout.fillWidth: true
@@ -9544,6 +11340,8 @@ text: "IP+"
                                             radioController
                                             .setSquelch(value)
                                         }
+                                }
+
                                 }
                             }
                         }
@@ -9657,11 +11455,11 @@ text: "IP+"
         title: "Control remoto por Internet / VPN"
         color: "#30363b"
         flags: Qt.Window
+        transientParent: window
 
         onClosing: function(close) {
-            close.accepted = false
-            visible = false
             remoteServerVisible = false
+            close.accepted = true
         }
 
         Rectangle {

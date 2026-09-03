@@ -3,6 +3,9 @@
 #include "radiocontroller.h"
 
 #include <QAbstractSocket>
+#include <QAudioDevice>
+#include <QAudioSource>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QFile>
 #include <QHostAddress>
@@ -11,12 +14,15 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QNetworkInterface>
+#include <QMediaDevices>
 #include <QRegularExpression>
 #include <QRandomGenerator>
 #include <QSettings>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
+#include <QUrl>
+#include <QUrlQuery>
 #include <QVariant>
 
 #include <algorithm>
@@ -26,6 +32,24 @@ namespace {
 constexpr qsizetype kMaximumRequestBytes = 64 * 1024;
 constexpr qint64 kClientActiveWindowMs = 10000;
 constexpr qsizetype kRemoteTokenLength = 8;
+
+int remoteAudioDeviceScore(const QAudioDevice &device)
+{
+    const QString name = device.description().trimmed().toLower();
+    int score = 0;
+    if (name.contains(QStringLiteral("icom"))) score += 100;
+    if (name.contains(QStringLiteral("7300"))) score += 100;
+    if (name.contains(QStringLiteral("usb audio codec"))) score += 80;
+    if (name.contains(QStringLiteral("usb audio device"))) score += 70;
+    if (name.contains(QStringLiteral("c-media"))
+        || name.contains(QStringLiteral("cmedia"))) score += 60;
+    if (name.contains(QStringLiteral("usb"))) score += 20;
+    if (name.contains(QStringLiteral("internal"))
+        || name.contains(QStringLiteral("integrado"))
+        || name.contains(QStringLiteral("dmic"))
+        || name.contains(QStringLiteral("sof-hda"))) score -= 40;
+    return score;
+}
 
 QString generateRemoteToken()
 {
@@ -307,7 +331,19 @@ void RemoteServer::loadSettings()
     m_port = std::clamp(settings.value(QStringLiteral("port"), 7300).toInt(),
                         1024, 65535);
     m_accessToken = settings.value(QStringLiteral("token")).toString().trimmed();
-    m_autoStart = settings.value(QStringLiteral("autoStart"), false).toBool();
+    // Desde esta versión el servidor de Internet queda activo por defecto.
+    // La marca de migración permite habilitarlo una sola vez también en
+    // instalaciones existentes, sin impedir que el usuario lo desactive
+    // posteriormente desde la ventana de control remoto.
+    const bool autoStartDefaultApplied =
+        settings.value(QStringLiteral("autoStartDefaultApplied"), false).toBool();
+    if (!autoStartDefaultApplied) {
+        m_autoStart = true;
+        settings.setValue(QStringLiteral("autoStart"), true);
+        settings.setValue(QStringLiteral("autoStartDefaultApplied"), true);
+    } else {
+        m_autoStart = settings.value(QStringLiteral("autoStart"), true).toBool();
+    }
 
     settings.beginGroup(QStringLiteral("BandMemories"));
     for (int vfo = 0; vfo < 2; ++vfo) {
@@ -468,6 +504,15 @@ void RemoteServer::stop()
         }
     }
     m_buffers.clear();
+
+    const auto audioSockets = m_audioClients;
+    m_audioClients.clear();
+    for (QTcpSocket *socket : audioSockets) {
+        if (socket) {
+            socket->disconnectFromHost();
+        }
+    }
+    stopAudioCaptureIfIdle();
 
     if (!m_clients.isEmpty()) {
         m_clients.clear();
@@ -632,6 +677,8 @@ void RemoteServer::onNewConnection()
         connect(socket, &QTcpSocket::disconnected,
                 this, [this, socket]() {
                     m_buffers.remove(socket);
+                    m_audioClients.removeAll(socket);
+                    stopAudioCaptureIfIdle();
                     socket->deleteLater();
                 });
     }
@@ -639,7 +686,22 @@ void RemoteServer::onNewConnection()
 
 void RemoteServer::onReadyRead(QTcpSocket *socket)
 {
-    if (!socket || !m_buffers.contains(socket)) {
+    if (!socket) {
+        return;
+    }
+
+    if (m_audioClients.contains(socket)) {
+        const QByteArray frame = socket->readAll();
+        if (!frame.isEmpty()
+            && (quint8(frame.at(0)) & 0x0F) == 0x08) {
+            // El navegador solicita cerrar el WebSocket: no es necesario
+            // conservar la captura mientras espera el cierre TCP.
+            socket->disconnectFromHost();
+        }
+        return;
+    }
+
+    if (!m_buffers.contains(socket)) {
         return;
     }
 
@@ -719,7 +781,8 @@ void RemoteServer::processRequest(QTcpSocket *socket, const QByteArray &request)
     }
 
     const QByteArray method = requestParts.at(0).toUpper();
-    QByteArray path = requestParts.at(1);
+    const QByteArray requestTarget = requestParts.at(1);
+    QByteArray path = requestTarget;
     const qsizetype queryPos = path.indexOf('?');
     if (queryPos >= 0) {
         path = path.left(queryPos);
@@ -736,6 +799,15 @@ void RemoteServer::processRequest(QTcpSocket *socket, const QByteArray &request)
                        line.mid(colon + 1).trimmed());
     }
 
+    if (method == "GET" && path == "/ws/audio") {
+        if (!upgradeAudioWebSocket(socket, requestTarget, headers)) {
+            sendResponse(socket, 401,
+                         QByteArrayLiteral("text/plain; charset=utf-8"),
+                         QByteArrayLiteral("Audio remoto no autorizado"));
+        }
+        return;
+    }
+
     if (method == "GET" && (path == "/" || path == "/index.html")) {
         sendResponse(socket, 200, QByteArrayLiteral("text/html; charset=utf-8"),
                      loadWebPage());
@@ -747,7 +819,7 @@ void RemoteServer::processRequest(QTcpSocket *socket, const QByteArray &request)
         info.insert(QStringLiteral("application"), QStringLiteral("Control IC-7300MK2"));
         info.insert(QStringLiteral("version"), QStringLiteral("1.2.7"));
         info.insert(QStringLiteral("authenticationRequired"), true);
-        info.insert(QStringLiteral("txRemoteAvailable"), false);
+        info.insert(QStringLiteral("txRemoteAvailable"), true);
         sendResponse(socket, 200,
                      QByteArrayLiteral("application/json; charset=utf-8"),
                      QJsonDocument(info).toJson(QJsonDocument::Compact));
@@ -912,7 +984,7 @@ QByteArray RemoteServer::radioStateJson() const
     state.insert(QStringLiteral("connected"), m_radio && m_radio->connected());
     state.insert(QStringLiteral("transmitting"), m_radio && m_radio->transmitting());
     state.insert(QStringLiteral("busy"), m_radio && m_radio->busy());
-    state.insert(QStringLiteral("txRemoteAvailable"), false);
+    state.insert(QStringLiteral("txRemoteAvailable"), true);
 
     if (m_radio) {
         state.insert(QStringLiteral("frequencyHz"), double(m_radio->frequencyHz()));
@@ -1157,6 +1229,16 @@ QByteArray RemoteServer::handleCommand(const QByteArray &body,
             return jsonMessage(QStringLiteral("AGC no válido"), false);
         }
         m_radio->setAgc(agc);
+    } else if (command == QStringLiteral("transmit")) {
+        bool ok = false;
+        const bool enabled = jsonBool(value, &ok);
+        if (!ok) {
+            *httpStatus = 400;
+            return jsonMessage(QStringLiteral("TX no válido"), false);
+        }
+        m_radio->setTransmit(enabled);
+    } else if (command == QStringLiteral("tune")) {
+        m_radio->startTuner();
     } else if (command == QStringLiteral("tuner")) {
         bool ok = false;
         const bool enabled = jsonBool(value, &ok);
@@ -1333,6 +1415,193 @@ QByteArray RemoteServer::handleCommand(const QByteArray &body,
     return jsonMessage(QStringLiteral("Orden enviada a la cola CI-V"), true);
 }
 
+bool RemoteServer::upgradeAudioWebSocket(
+    QTcpSocket *socket,
+    const QByteArray &requestTarget,
+    const QHash<QByteArray, QByteArray> &headers)
+{
+    if (!socket
+        || headers.value(QByteArrayLiteral("upgrade")).toLower()
+               != QByteArrayLiteral("websocket")) {
+        return false;
+    }
+
+    const QUrl url = QUrl::fromEncoded(requestTarget);
+    const QString suppliedToken =
+        QUrlQuery(url).queryItemValue(QStringLiteral("token")).trimmed().toUpper();
+    if (suppliedToken != m_accessToken) {
+        return false;
+    }
+
+    const QByteArray key =
+        headers.value(QByteArrayLiteral("sec-websocket-key")).trimmed();
+    if (key.isEmpty()) {
+        return false;
+    }
+
+    const QByteArray accept = QCryptographicHash::hash(
+        key + QByteArrayLiteral("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"),
+        QCryptographicHash::Sha1).toBase64();
+
+    QByteArray response = QByteArrayLiteral("HTTP/1.1 101 Switching Protocols\r\n");
+    response += QByteArrayLiteral("Upgrade: websocket\r\n");
+    response += QByteArrayLiteral("Connection: Upgrade\r\n");
+    response += QByteArrayLiteral("Sec-WebSocket-Accept: ") + accept
+                + QByteArrayLiteral("\r\n\r\n");
+    socket->write(response);
+    socket->flush();
+    m_audioClients.append(socket);
+    noteClient(socket);
+
+    if (!startAudioCapture()) {
+        sendWebSocketFrame(
+            socket,
+            0x01,
+            QByteArrayLiteral("{\"error\":\"No se pudo abrir la entrada de audio USB\"}"));
+        QTimer::singleShot(100, socket, &QTcpSocket::disconnectFromHost);
+        return true;
+    }
+
+    QJsonObject format;
+    format.insert(QStringLiteral("type"), QStringLiteral("format"));
+    format.insert(QStringLiteral("sampleRate"), m_audioFormat.sampleRate());
+    format.insert(QStringLiteral("channels"), m_audioFormat.channelCount());
+    format.insert(QStringLiteral("sampleFormat"), QStringLiteral("int16"));
+    sendWebSocketFrame(
+        socket,
+        0x01,
+        QJsonDocument(format).toJson(QJsonDocument::Compact));
+    return true;
+}
+
+bool RemoteServer::startAudioCapture()
+{
+    if (m_audioSource && m_audioInput) {
+        return true;
+    }
+
+    const QList<QAudioDevice> devices = QMediaDevices::audioInputs();
+    if (devices.isEmpty()) {
+        return false;
+    }
+
+    QSettings settings;
+    const QByteArray preferredId = QByteArray::fromBase64(
+        settings.value(QStringLiteral("morse/audioDeviceId")).toByteArray());
+
+    int selected = -1;
+    for (int index = 0; index < devices.size(); ++index) {
+        if (!preferredId.isEmpty() && devices.at(index).id() == preferredId) {
+            selected = index;
+            break;
+        }
+    }
+    if (selected < 0) {
+        int bestScore = -1000;
+        for (int index = 0; index < devices.size(); ++index) {
+            const int score = remoteAudioDeviceScore(devices.at(index));
+            if (score > bestScore) {
+                bestScore = score;
+                selected = index;
+            }
+        }
+    }
+
+    const QAudioDevice device = devices.at(std::max(0, selected));
+    const QList<QPair<int, int>> candidates = {
+        {48000, 2}, {48000, 1}, {44100, 2}, {44100, 1}
+    };
+    QAudioFormat selectedFormat;
+    for (const auto &candidate : candidates) {
+        QAudioFormat format;
+        format.setSampleRate(candidate.first);
+        format.setChannelCount(candidate.second);
+        format.setSampleFormat(QAudioFormat::Int16);
+        if (device.isFormatSupported(format)) {
+            selectedFormat = format;
+            break;
+        }
+    }
+    if (!selectedFormat.isValid()) {
+        return false;
+    }
+
+    m_audioFormat = selectedFormat;
+    m_audioSource = new QAudioSource(device, m_audioFormat, this);
+    m_audioSource->setBufferSize(m_audioFormat.bytesForDuration(120000));
+    m_audioInput = m_audioSource->start();
+    if (!m_audioInput) {
+        m_audioSource->deleteLater();
+        m_audioSource = nullptr;
+        return false;
+    }
+
+    connect(m_audioInput, &QIODevice::readyRead,
+            this, &RemoteServer::broadcastAudio);
+    return true;
+}
+
+void RemoteServer::stopAudioCaptureIfIdle()
+{
+    if (!m_audioClients.isEmpty()) {
+        return;
+    }
+    if (m_audioInput) {
+        disconnect(m_audioInput, nullptr, this, nullptr);
+        m_audioInput = nullptr;
+    }
+    if (m_audioSource) {
+        m_audioSource->stop();
+        m_audioSource->deleteLater();
+        m_audioSource = nullptr;
+    }
+}
+
+void RemoteServer::broadcastAudio()
+{
+    if (!m_audioInput) {
+        return;
+    }
+    const QByteArray pcm = m_audioInput->readAll();
+    if (pcm.isEmpty()) {
+        return;
+    }
+    const auto clients = m_audioClients;
+    for (QTcpSocket *socket : clients) {
+        if (socket && socket->state() == QAbstractSocket::ConnectedState) {
+            // Evita aumentar indefinidamente la latencia de clientes lentos.
+            if (socket->bytesToWrite() < 512 * 1024) {
+                sendWebSocketFrame(socket, 0x02, pcm);
+            }
+        }
+    }
+}
+
+void RemoteServer::sendWebSocketFrame(
+    QTcpSocket *socket, quint8 opcode, const QByteArray &payload)
+{
+    if (!socket) {
+        return;
+    }
+    QByteArray frame;
+    frame.append(char(0x80 | (opcode & 0x0F)));
+    const quint64 size = quint64(payload.size());
+    if (size < 126) {
+        frame.append(char(size));
+    } else if (size <= 0xFFFF) {
+        frame.append(char(126));
+        frame.append(char((size >> 8) & 0xFF));
+        frame.append(char(size & 0xFF));
+    } else {
+        frame.append(char(127));
+        for (int shift = 56; shift >= 0; shift -= 8) {
+            frame.append(char((size >> shift) & 0xFF));
+        }
+    }
+    frame += payload;
+    socket->write(frame);
+}
+
 QByteArray RemoteServer::loadWebPage() const
 {
     QFile file(QStringLiteral(":/remote/index.html"));
@@ -1364,7 +1633,7 @@ void RemoteServer::sendResponse(
     response += "X-Content-Type-Options: nosniff\r\n";
     response += "X-Frame-Options: DENY\r\n";
     response += "Referrer-Policy: no-referrer\r\n";
-    response += "Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'\r\n";
+    response += "Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'\r\n";
     for (const auto &header : extraHeaders) {
         response += header.first + ": " + header.second + "\r\n";
     }

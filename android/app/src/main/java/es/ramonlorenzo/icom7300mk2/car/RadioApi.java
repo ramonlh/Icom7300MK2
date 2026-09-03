@@ -1,6 +1,7 @@
 package es.ramonlorenzo.icom7300mk2.car;
 
 import org.json.JSONObject;
+import org.json.JSONException;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -19,11 +20,24 @@ final class RadioApi {
             json.optString("frequencyText", "—"), json.optString("mode", "—"),
             json.optString("filter", "—"), json.optString("band", "—"),
             json.optString("sMeterText", "—"),
+            Math.max(0, Math.min(100, json.optInt("sMeterPercent", 0))),
             json.optString("actionStatus", json.optString("status", "")));
     }
     void setFrequency(long frequencyHz) throws IOException {
+        command("frequency", frequencyHz);
+    }
+    void setMode(String mode) throws IOException { command("mode", mode); }
+    void setFilter(int filter) throws IOException { command("filter", filter); }
+    void setBand(String band) throws IOException { command("band", band); }
+
+    private void command(String command, Object value) throws IOException {
         JSONObject body = new JSONObject();
-        body.put("command", "frequency"); body.put("value", frequencyHz);
+        try {
+            body.put("command", command);
+            body.put("value", value);
+        } catch (JSONException error) {
+            throw new IOException("No se pudo preparar la orden", error);
+        }
         request("POST", "/api/command", body);
     }
     private JSONObject request(String method, String path, JSONObject body) throws IOException {

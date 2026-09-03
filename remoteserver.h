@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QAudioFormat>
 #include <QHash>
 #include <QList>
 #include <QPair>
@@ -9,6 +10,8 @@
 class QTcpServer;
 class QTcpSocket;
 class QTimer;
+class QAudioSource;
+class QIODevice;
 class RadioController;
 
 class RemoteServer final : public QObject
@@ -71,6 +74,17 @@ private:
     void onNewConnection();
     void onReadyRead(QTcpSocket *socket);
     void processRequest(QTcpSocket *socket, const QByteArray &request);
+    bool upgradeAudioWebSocket(
+        QTcpSocket *socket,
+        const QByteArray &requestTarget,
+        const QHash<QByteArray, QByteArray> &headers
+    );
+    bool startAudioCapture();
+    void stopAudioCaptureIfIdle();
+    void broadcastAudio();
+    void sendWebSocketFrame(QTcpSocket *socket,
+                            quint8 opcode,
+                            const QByteArray &payload);
 
     [[nodiscard]] bool authorized(const QHash<QByteArray, QByteArray> &headers) const;
     [[nodiscard]] QByteArray radioStateJson() const;
@@ -91,6 +105,10 @@ private:
     QHash<QTcpSocket *, QByteArray> m_buffers;
     QHash<QString, qint64> m_clients;
     QHash<QString, qint64> m_bandMemories;
+    QList<QTcpSocket *> m_audioClients;
+    QAudioSource *m_audioSource = nullptr;
+    QIODevice *m_audioInput = nullptr;
+    QAudioFormat m_audioFormat;
 
     int m_port = 7300;
     QString m_accessToken;

@@ -1,4 +1,13 @@
-CONTROL IC-7300MK2 - VERSIÓN 1.2.11
+CONTROL IC-7300MK2 - VERSIÓN 1.2.12
+
+
+CAMBIOS 1.2.12 - INTERFAZ AGRUPADA Y S-METER ANALÓGICO
+- Controles superiores y laterales agrupados por funciones con colores diferenciados.
+- Nuevo S-Meter analógico con lectura digital y refresco CI-V más regular.
+- Panel central redistribuido para mostrar VFO, medidores, rueda y filtros.
+- Altura de la ventana principal fijada en 880 píxeles.
+- Cierre explícito de la ventana de Internet al salir del programa.
+- Android Auto añade refresco automático y pantallas de modo, filtro, banda y sintonía.
 
 
 CAMBIOS 1.2.11 - MEJORA DE CONTRASTE EN OPCIÓN DE ARRANQUE REMOTO

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(Icom7300Mk2Control
-    VERSION 1.2.11
+    VERSION 1.2.12
     LANGUAGES CXX
 )
 
@@ -21,6 +21,8 @@ qt_standard_project_setup()
 
 qt_add_executable(Icom7300Mk2Control
     main.cpp
+    applicationlauncher.cpp
+    applicationlauncher.h
     radiocontroller.cpp
     radiocontroller.h
     morsetrainer.cpp

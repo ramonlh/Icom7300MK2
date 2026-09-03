@@ -16,6 +16,8 @@ class RadioController final : public QObject
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
     Q_PROPERTY(bool transmitting READ transmitting NOTIFY transmittingChanged)
     Q_PROPERTY(bool pttOwned READ pttOwned NOTIFY transmittingChanged)
+    Q_PROPERTY(int txSafetyTimeoutSeconds READ txSafetyTimeoutSeconds
+               WRITE setTxSafetyTimeoutSeconds NOTIFY txSafetySettingsChanged)
     Q_PROPERTY(bool dataMode READ dataMode NOTIFY dataModeChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool memoryReadActive READ memoryReadActive
@@ -368,6 +370,8 @@ public:
     [[nodiscard]] bool connected() const;
     [[nodiscard]] bool transmitting() const;
     [[nodiscard]] bool pttOwned() const;
+    [[nodiscard]] int txSafetyTimeoutSeconds() const;
+    void setTxSafetyTimeoutSeconds(int seconds);
     [[nodiscard]] bool dataMode() const;
     [[nodiscard]] bool busy() const;
     [[nodiscard]] bool memoryReadActive() const;
@@ -481,6 +485,8 @@ public:
     [[nodiscard]] int civControllerAddress() const;
     [[nodiscard]] bool autoConnectEnabled() const;
     [[nodiscard]] bool autoReconnectEnabled() const;
+    Q_INVOKABLE void setAutoConnectPreference(bool enabled);
+    Q_INVOKABLE void setAutoReconnectPreference(bool enabled);
     [[nodiscard]] int pollIntervalMs() const;
     [[nodiscard]] int responseTimeoutMs() const;
     [[nodiscard]] QString usbInterfacesText() const;
@@ -603,6 +609,7 @@ public:
     Q_INVOKABLE void setSpectrumScopeVbwWide(bool wide);
 
     Q_INVOKABLE void setFrequency(const QString &text);
+    void setExternalFrequency(qulonglong frequencyHz);
     Q_INVOKABLE void adjustFrequency(int deltaHz);
 
     Q_INVOKABLE void setVfoFrequency(int vfoNumber,
@@ -747,6 +754,7 @@ signals:
     void actionStatusChanged();
     void portNameChanged();
     void connectionSettingsChanged();
+    void txSafetySettingsChanged();
     void scopeStateChanged();
     void scopeWaveformChanged();
 
@@ -1154,6 +1162,7 @@ private:
     void updateBandStacking(const QByteArray &data);
     void sendNextCwRefreshQuery();
     void beginInitialTxProbe();
+    void startDefaultSpectrumScope();
     void deferMemoryRead(int firstChannel,
                          int count,
                          bool includeScanSettings);
@@ -1261,6 +1270,7 @@ private:
     QTimer m_pollTimer;
     QTimer m_responseTimer;
     QTimer m_reconnectTimer;
+    QTimer m_txSafetyTimer;
 
     QString m_configuredPort;
     int m_configuredBaudRate = 115200;
@@ -1271,6 +1281,7 @@ private:
     bool m_shuttingDown = false;
     int m_pollIntervalMs = 90;
     int m_responseTimeoutMs = 850;
+    int m_txSafetyTimeoutSeconds = 180;
 
     QByteArray m_receiveBuffer;
 

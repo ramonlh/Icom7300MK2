@@ -3,7 +3,7 @@
 ![Platform](https://img.shields.io/badge/platform-Linux-1793D1)
 ![Qt](https://img.shields.io/badge/Qt-6.4%2B-41CD52)
 ![C++](https://img.shields.io/badge/C%2B%2B-20-00599C)
-![Version](https://img.shields.io/badge/version-1.2.11-blue)
+![Version](https://img.shields.io/badge/version-1.2.12-blue)
 ![Status](https://img.shields.io/badge/status-en%20desarrollo-orange)
 
 Aplicación de escritorio para **Linux** destinada al control del transceptor **Icom IC-7300MK2** mediante **CI-V**, desarrollada en **C++20, Qt 6 y QML**.
@@ -14,6 +14,15 @@ El objetivo del proyecto es disponer de un panel único, compacto y legible desd
 > Este proyecto está desarrollado específicamente alrededor del **IC-7300MK2**. No pretende ser, por el momento, un controlador CI-V genérico para todos los modelos Icom.
 
 ---
+
+### v1.2.12 — Interfaz agrupada y S-Meter analógico
+
+- La barra superior y los paneles laterales agrupan los controles por familias con colores y títulos diferenciados.
+- Nuevo S-Meter analógico con aguja animada, lectura CI-V más regular y lectura digital complementaria.
+- Redistribución del display, VFO, medidores y paneles inferiores para mejorar la visibilidad.
+- La ventana principal usa una altura fija de 880 px y conserva el ancho ajustable.
+- La ventana de control por Internet queda vinculada a la principal y se cierra explícitamente al salir.
+- El cliente Android Auto incorpora actualización automática del S-Meter y pantallas de modo, filtro, banda y sintonía.
 
 ### v1.2.11 — Contraste del arranque automático remoto
 
@@ -44,7 +53,7 @@ La clave de acceso al panel web puede fijarse manualmente desde la ventana **INT
 
 ## Estado del proyecto
 
-Versión actual: **1.2.11**
+Versión actual: **1.2.12**
 
 El programa se encuentra en desarrollo activo. Las funciones principales de control CI-V, VFO, niveles, memorias, spectrum/waterfall y entrenador Morse están implementadas y se siguen refinando.
 
@@ -737,8 +746,8 @@ Para versiones publicadas se recomienda utilizar **GitHub Releases** en lugar de
 Ejemplo:
 
 ```text
-v1.2.11
-└── Icom7300Mk2Control_v1.2.11.zip
+v1.2.12
+└── Icom7300Mk2Control_v1.2.12.zip
 ```
 
 El repositorio principal debería contener el código fuente de la versión actual.
@@ -760,4 +769,3 @@ Si deseas una licencia permisiva para software abierto, **MIT** es una opción h
 Este proyecto es independiente y no está afiliado, patrocinado ni respaldado oficialmente por Icom Inc.
 
 > **v1.2.10:** corregida la pantalla de autenticación: la actualización periódica ya no borra la clave mientras se está escribiendo y `Enter` permite validarla.
-

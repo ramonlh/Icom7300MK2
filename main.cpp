@@ -1,25 +1,46 @@
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QLockFile>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QUrl>
+#include <QDir>
+#include <QStandardPaths>
+#include <QTimer>
 
 #include "radiocontroller.h"
 #include "morsetrainer.h"
 #include "remoteserver.h"
+#include "applicationlauncher.h"
 
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
+
+    QString runtimeDirectory = QStandardPaths::writableLocation(
+        QStandardPaths::RuntimeLocation);
+    if (runtimeDirectory.isEmpty())
+        runtimeDirectory = QDir::tempPath();
+    QLockFile instanceLock(
+        QDir(runtimeDirectory).filePath(
+            QStringLiteral("Icom7300Mk2Control.lock")));
+    instanceLock.setStaleLockTime(0);
+    if (!instanceLock.tryLock(100))
+        return 0;
+
+    // La vista compacta sustituye temporalmente a la ventana principal.
+    // No se debe terminar el proceso durante ese intercambio; el cierre
+    // explícito desde QML sigue llamando a Qt.quit().
+    app.setQuitOnLastWindowClosed(false);
 
     QGuiApplication::setOrganizationName(QStringLiteral("RamonLorenzo"));
     QGuiApplication::setApplicationName(
         QStringLiteral("Icom7300Mk2Control")
     );
     QGuiApplication::setApplicationVersion(
-        QStringLiteral("1.2.11")
+        QStringLiteral("1.2.12")
     );
     QGuiApplication::setApplicationDisplayName(
         QStringLiteral("IC-7300MK2 Control")
@@ -71,10 +92,37 @@ int main(int argc, char *argv[])
     RadioController radioController;
     MorseTrainer morseTrainer;
     RemoteServer remoteServer(&radioController);
+    ApplicationLauncher applicationLauncher;
+    QObject::connect(&applicationLauncher, &ApplicationLauncher::lanFrequencyReceived,
+                     &radioController, [&radioController](qulonglong hz) {
+        radioController.setExternalFrequency(hz);
+    });
+    if (applicationLauncher.lanConnectionEnabled() && radioController.autoConnectEnabled()) {
+        QTimer::singleShot(500, &applicationLauncher, [&applicationLauncher]() {
+            applicationLauncher.testLanConnection();
+        });
+        // DHCP/radio startup can make the first discovery packet arrive too
+        // early. Retry a few seconds later if LAN is still disconnected.
+        QTimer::singleShot(8000, &applicationLauncher, [&applicationLauncher]() {
+            if (!applicationLauncher.lanConnected())
+                applicationLauncher.testLanConnection();
+        });
+        QTimer::singleShot(16000, &applicationLauncher, [&applicationLauncher]() {
+            if (!applicationLauncher.lanConnected())
+                applicationLauncher.testLanConnection();
+        });
+    }
 
     // El puerto CI-V debe cerrarse antes de que desaparezca el bucle de
     // eventos. Así se libera inmediatamente el bloqueo exclusivo de Linux,
     // incluso si alguna ventana QML auxiliar quedó creada pero oculta.
+    QObject::connect(
+        &app,
+        &QCoreApplication::aboutToQuit,
+        &applicationLauncher,
+        &ApplicationLauncher::shutdownLanConnection,
+        Qt::DirectConnection
+    );
     QObject::connect(
         &app,
         &QCoreApplication::aboutToQuit,
@@ -112,6 +160,10 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(
         QStringLiteral("remoteServer"),
         &remoteServer
+    );
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("applicationLauncher"),
+        &applicationLauncher
     );
 
     const QUrl mainQmlUrl(QStringLiteral("qrc:/Main.qml"));

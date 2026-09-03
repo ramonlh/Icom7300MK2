@@ -214,6 +214,10 @@ RadioController::RadioController(QObject *parent)
 
     loadConnectionSettings();
 
+    m_txSafetyTimeoutSeconds = std::clamp(
+        QSettings().value(QStringLiteral("tx/safetyTimeoutSeconds"), 180).toInt(),
+        5, 3600);
+
     m_pollTimer.setInterval(m_pollIntervalMs);
     m_pollTimer.setTimerType(Qt::PreciseTimer);
 
@@ -222,6 +226,8 @@ RadioController::RadioController(QObject *parent)
 
     m_reconnectTimer.setSingleShot(true);
     m_reconnectTimer.setInterval(3000);
+    m_txSafetyTimer.setSingleShot(true);
+    m_txSafetyTimer.setInterval(m_txSafetyTimeoutSeconds * 1000);
 
     connect(&m_pollTimer, &QTimer::timeout,
             this, &RadioController::pollNextValue);
@@ -229,17 +235,27 @@ RadioController::RadioController(QObject *parent)
             this, &RadioController::onResponseTimeout);
     connect(&m_reconnectTimer, &QTimer::timeout,
             this, &RadioController::connectRadio);
+    connect(&m_txSafetyTimer, &QTimer::timeout, this, [this]() {
+        if (!m_pttOwned) return;
+        forceReceive();
+        setActionStatus(QStringLiteral(
+            "TX desactivado por tiempo máximo de seguridad (%1 s)"
+        ).arg(m_txSafetyTimeoutSeconds));
+    });
     connect(&m_serial, &QSerialPort::readyRead,
             this, &RadioController::onReadyRead);
     connect(&m_serial, &QSerialPort::errorOccurred,
             this, &RadioController::onSerialError);
 
-    if (m_autoConnectEnabled) {
+    const bool lanPreferred = QSettings().value(QStringLiteral("lan/enabled"), false).toBool();
+    if (m_autoConnectEnabled && !lanPreferred) {
         QTimer::singleShot(
             300,
             this,
             &RadioController::connectRadio
         );
+    } else if (lanPreferred) {
+        setStatus(QStringLiteral("LAN seleccionada: conexión USB desactivada temporalmente"));
     } else {
         setStatus(
             QStringLiteral(
@@ -252,6 +268,22 @@ RadioController::RadioController(QObject *parent)
 RadioController::~RadioController()
 {
     shutdown();
+}
+
+int RadioController::txSafetyTimeoutSeconds() const
+{
+    return m_txSafetyTimeoutSeconds;
+}
+
+void RadioController::setTxSafetyTimeoutSeconds(int seconds)
+{
+    seconds = std::clamp(seconds, 5, 3600);
+    if (seconds == m_txSafetyTimeoutSeconds) return;
+    m_txSafetyTimeoutSeconds = seconds;
+    m_txSafetyTimer.setInterval(seconds * 1000);
+    QSettings().setValue(QStringLiteral("tx/safetyTimeoutSeconds"), seconds);
+    if (m_pttOwned) m_txSafetyTimer.start();
+    emit txSafetySettingsChanged();
 }
 
 bool RadioController::connected() const { return m_serial.isOpen(); }
@@ -1012,6 +1044,20 @@ bool RadioController::autoReconnectEnabled() const
     return m_autoReconnectEnabled;
 }
 
+void RadioController::setAutoConnectPreference(bool enabled)
+{
+    m_autoConnectEnabled = enabled;
+    QSettings().setValue(QStringLiteral("connection/autoConnect"), enabled);
+    emit connectionSettingsChanged();
+}
+
+void RadioController::setAutoReconnectPreference(bool enabled)
+{
+    m_autoReconnectEnabled = enabled;
+    QSettings().setValue(QStringLiteral("connection/autoReconnect"), enabled);
+    emit connectionSettingsChanged();
+}
+
 int RadioController::pollIntervalMs() const
 {
     return m_pollIntervalMs;
@@ -1738,6 +1784,11 @@ void RadioController::reconnectRadio()
         return;
     }
 
+    if (QSettings().value(QStringLiteral("lan/enabled"), false).toBool()) {
+        setStatus(QStringLiteral("LAN seleccionada: conexión USB bloqueada"));
+        return;
+    }
+
     m_reconnectTimer.stop();
     disconnectRadio();
 
@@ -2217,6 +2268,15 @@ void RadioController::connectRadio()
         this,
         &RadioController::beginInitialTxProbe
     );
+
+    // El scope y su salida de datos quedan habilitados por defecto. Se
+    // espera a que termine la comprobación inicial TX/RX para no mezclar
+    // órdenes CI-V durante la fase más sensible de la conexión.
+    QTimer::singleShot(
+        650,
+        this,
+        &RadioController::startDefaultSpectrumScope
+    );
 }
 
 void RadioController::disconnectRadio()
@@ -2357,6 +2417,24 @@ void RadioController::beginInitialTxProbe()
         this,
         &RadioController::pollNextValue
     );
+}
+
+void RadioController::startDefaultSpectrumScope()
+{
+    if (m_shuttingDown || !m_serial.isOpen() || m_scopeRunning) {
+        return;
+    }
+
+    if (m_initialTxProbePending || m_transmitting) {
+        QTimer::singleShot(
+            500,
+            this,
+            &RadioController::startDefaultSpectrumScope
+        );
+        return;
+    }
+
+    startSpectrumScope();
 }
 
 void RadioController::deferMemoryRead(
@@ -2524,7 +2602,7 @@ void RadioController::setTransmit(bool enabled)
         return;
     }
 
-    if (!enabled && !m_pttOwned) {
+    if (!enabled && !m_pttOwned && !m_transmitting) {
         return;
     }
 
@@ -2534,6 +2612,13 @@ void RadioController::setTransmit(bool enabled)
 void RadioController::setFrequency(const QString &text)
 {
     setVfoFrequency(m_selectedVfo, text);
+}
+
+void RadioController::setExternalFrequency(qulonglong frequencyHz)
+{
+    // Update the displayed/VFO state without queueing a write back to the
+    // radio. This is used by the direct LAN status stream.
+    decodeFrequency(encodeFrequency(frequencyHz));
 }
 
 void RadioController::adjustFrequency(int deltaHz)
@@ -5933,23 +6018,30 @@ void RadioController::pollNextValue()
         return;
     }
 
-    // Uno de los otros dos turnos se dedica a medidores de recepción.
+    // Un turno completo se reserva al S-meter. Antes se mezclaba con los
+    // medidores lentos y aparecían pausas de más de un segundo entre varias
+    // lecturas consecutivas. Así la cadencia queda estable (270 ms con el
+    // intervalo normal de 90 ms).
     if ((m_pollPhase % 3) == 1) {
-        static constexpr QueryKind rxMeters[] = {
-            QueryKind::Smeter,
-            QueryKind::Smeter,
-            QueryKind::Smeter,
+        sendQuery(QueryKind::Smeter);
+        return;
+    }
+
+    // Los valores auxiliares de recepción cambian mucho más despacio. Se
+    // intercalan aproximadamente cada 1,35 s sin interrumpir el S-meter.
+    if ((m_pollPhase % 15) == 2) {
+        static constexpr QueryKind slowRxMeters[] = {
             QueryKind::SquelchFull,
-            QueryKind::Smeter,
             QueryKind::VoltageMeter,
             QueryKind::CurrentMeter,
             QueryKind::Overflow
         };
 
         const QueryKind meterQuery =
-            rxMeters[
+            slowRxMeters[
                 m_fastMeterIndex
-                % int(sizeof(rxMeters) / sizeof(rxMeters[0]))
+                % int(sizeof(slowRxMeters)
+                      / sizeof(slowRxMeters[0]))
             ];
 
         ++m_fastMeterIndex;
@@ -6422,6 +6514,7 @@ void RadioController::forceReceive()
     m_serial.flush();
     m_serial.waitForBytesWritten(180);
     m_pttOwned = false;
+    m_txSafetyTimer.stop();
 }
 
 void RadioController::queueProtectedWrite(WriteKind kind,
@@ -6536,6 +6629,7 @@ void RadioController::completeWrite(bool accepted)
             m_pttOwned = true;
             forceReceive();
             m_txReleasePending = false;
+            m_txSafetyTimer.stop();
         }
 
         if (m_memorySequenceAction != MemorySequenceAction::None) {
@@ -7029,6 +7123,11 @@ void RadioController::completeWrite(bool accepted)
         const bool releaseAfterTx = desiredValue == 1 && m_txReleasePending;
 
         m_pttOwned = desiredValue == 1;
+
+        if (desiredValue == 1)
+            m_txSafetyTimer.start();
+        else
+            m_txSafetyTimer.stop();
 
         if (desiredValue == 0) {
             m_txReleasePending = false;
@@ -9118,6 +9217,12 @@ void RadioController::updateMeter(
             std::clamp(int(std::lround(raw * 100.0 / 120.0)), 0, 100);
         m_swrMeterText =
             QString::number(swr, 'f', 1).replace('.', ',');
+        if (m_pttOwned && swr > 2.5) {
+            forceReceive();
+            setActionStatus(QStringLiteral(
+                "TX desactivado por SWR alto (%1)"
+            ).arg(QString::number(swr, 'f', 1).replace('.', ',')));
+        }
         break;
     }
 
