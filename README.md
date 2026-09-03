@@ -22,7 +22,6 @@ El objetivo del proyecto es disponer de un panel único, compacto y legible desd
 - Redistribución del display, VFO, medidores y paneles inferiores para mejorar la visibilidad.
 - La ventana principal usa una altura fija de 880 px y conserva el ancho ajustable.
 - La ventana de control por Internet queda vinculada a la principal y se cierra explícitamente al salir.
-- El cliente Android Auto incorpora actualización automática del S-Meter y pantallas de modo, filtro, banda y sintonía.
 
 ### v1.2.11 — Contraste del arranque automático remoto
 
