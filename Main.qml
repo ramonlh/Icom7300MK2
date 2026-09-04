@@ -332,6 +332,15 @@ ApplicationWindow {
         }
     }
 
+    function selectUsbDataMode() {
+        if (applicationLauncher.lanConnected) {
+            applicationLauncher.testLanModeName("USB")
+            applicationLauncher.setLanDataEnabled(true, "USB")
+        } else {
+            radioController.setOperatingModeState("USB", true, 1)
+        }
+    }
+
     function activateCompactMode(modeName) {
         if (modeName === "SSTV") {
             if (applicationLauncher.qsstvRunning) {
@@ -341,7 +350,7 @@ ApplicationWindow {
             prepareExternalProgram("qsstv")
             externalDigitalMode = "SSTV"
             radioController.setFrequency(String(applicationLauncher.sstvFrequencyHz))
-            radioController.setOperatingModeState("USB", true, 1)
+            selectUsbDataMode()
             applicationLauncher.launchQsstv()
         } else if (modeName === "FT8/FT4") {
             if (applicationLauncher.decodiumRunning) {
@@ -351,7 +360,7 @@ ApplicationWindow {
             prepareExternalProgram("decodium")
             externalDigitalMode = "FT8/FT4"
             radioController.setFrequency(String(applicationLauncher.ftFrequencyHz))
-            radioController.setOperatingModeState("USB", true, 1)
+            selectUsbDataMode()
             applicationLauncher.launchDecodium()
         } else if (modeName === "RTTY" || modeName === "RTTY-R") {
             if (applicationLauncher.fldigiRunning
@@ -362,7 +371,7 @@ ApplicationWindow {
             prepareExternalProgram("fldigi")
             externalDigitalMode = modeName
             radioController.setFrequency(String(applicationLauncher.rttyFrequencyHz))
-            radioController.setOperatingModeState("USB", true, 1)
+            selectUsbDataMode()
             applicationLauncher.launchFldigi()
             applicationLauncher.setFldigiMode("RTTY")
             applicationLauncher.setFldigiReverse(modeName === "RTTY-R")
@@ -6547,7 +6556,9 @@ ApplicationWindow {
                                       : (modelData === "RTTY" || modelData === "RTTY-R")
                                       ? (applicationLauncher.fldigiRunning
                                          && externalDigitalMode === modelData)
-                                      : radioController.modeText === modelData
+                                      : (applicationLauncher.lanConnected
+                                         ? applicationLauncher.lanMode === modelData
+                                         : radioController.modeText === modelData)
                             activeColor: modelData === "SSTV" ? "#86652f"
                                          : modelData === "FT8/FT4" ? "#28789a"
                                          : "#2f72b9"
@@ -7281,9 +7292,6 @@ ApplicationWindow {
                                             TextField { id: lanPasswordField; Layout.fillWidth: true; enabled: connectionTypeBox.currentIndex === 1; echoMode: lanPasswordVisible.checked ? TextInput.Normal : TextInput.Password }
                                             CheckBox { id: lanPasswordVisible; text: "Mostrar"; enabled: connectionTypeBox.currentIndex === 1; font.pixelSize: 10; palette.text: "#d9e0e4" }
                                         }
-                                        Item { Layout.columnSpan: 1 }
-                                        PanelButton { text: "CONECTAR LAN"; Layout.columnSpan: 3; Layout.fillWidth: true; enabled: connectionTypeBox.currentIndex === 1; onClicked: applicationLauncher.testLanConnection() }
-
                                         Text {
                                             text: "Velocidad"
                                             color: "#d9e0e4"
@@ -9545,9 +9553,9 @@ text: "IP+"
                                                                        .fldigiRunning
                                                                        && externalDigitalMode
                                                                           === modelData)
-                                                                    : radioController
-                                                                      .modeText
-                                                                      === modelData
+                                                                    : (applicationLauncher.lanConnected
+                                                                       ? applicationLauncher.lanMode === modelData
+                                                                       : radioController.modeText === modelData)
                                                                 activeColor:
                                                                     modelData === "SSTV" ? "#86652f"
                                                                     : modelData === "FT8/FT4" ? "#28789a"
@@ -9569,8 +9577,7 @@ text: "IP+"
                                                                         externalDigitalMode = "SSTV"
                                                                         radioController.setFrequency(
                                                                             String(applicationLauncher.sstvFrequencyHz))
-                                                                        radioController.setOperatingModeState(
-                                                                            "USB", true, 1)
+                                                                        selectUsbDataMode()
                                                                         applicationLauncher.launchQsstv()
                                                                     } else if (modelData === "FT8/FT4") {
                                                                         if (applicationLauncher.decodiumRunning) {
@@ -9581,8 +9588,7 @@ text: "IP+"
                                                                         externalDigitalMode = "FT8/FT4"
                                                                         radioController.setFrequency(
                                                                             String(applicationLauncher.ftFrequencyHz))
-                                                                        radioController.setOperatingModeState(
-                                                                            "USB", true, 1)
+                                                                        selectUsbDataMode()
                                                                         applicationLauncher.launchDecodium()
                                                                     } else if (modelData === "RTTY"
                                                                             || modelData === "RTTY-R") {
@@ -9596,12 +9602,7 @@ text: "IP+"
                                                                         radioController.setFrequency(
                                                                             String(applicationLauncher.rttyFrequencyHz)
                                                                         )
-                                                                        radioController
-                                                                        .setOperatingModeState(
-                                                                            "USB",
-                                                                            true,
-                                                                            1
-                                                                        )
+                                                                        selectUsbDataMode()
                                                                         applicationLauncher
                                                                         .launchFldigi()
                                                                         applicationLauncher
@@ -10209,15 +10210,17 @@ text: "IP+"
                                                 text: modelData
                                                 textPixelSize: 12
                                                 selected:
-                                                    radioController
-                                                    .modeText
-                                                    === modelData
+                                                    applicationLauncher.lanConnected
+                                                    ? applicationLauncher.lanMode === modelData
+                                                    : radioController.modeText === modelData
                                                 activeColor: "#2f72b9"
                                                 enabled:
                                                     controlsEnabled()
 
                                                 onClicked:
-                                                    if (applicationLauncher.lanConnected
+                                                    if (["RTTY","RTTY-R","SSTV","FT8/FT4"].indexOf(modelData) >= 0)
+                                                        selectUsbDataMode()
+                                                    else if (applicationLauncher.lanConnected
                                                             && ["LSB","USB","AM","CW","RTTY","FM","CW-R","RTTY-R"].indexOf(modelData) >= 0)
                                                         applicationLauncher.testLanModeName(modelData)
                                                     else

@@ -56,6 +56,7 @@ class ApplicationLauncher final : public QObject
     Q_PROPERTY(bool lanConnectionEnabled READ lanConnectionEnabled WRITE setLanConnectionEnabled NOTIFY lanSettingsChanged)
     Q_PROPERTY(bool lanConnected READ lanConnected NOTIFY lanConnectionChanged)
     Q_PROPERTY(bool lanDataEnabled READ lanDataEnabled NOTIFY lanDataEnabledChanged)
+    Q_PROPERTY(QString lanMode READ lanMode NOTIFY lanModeChanged)
 
 public:
     explicit ApplicationLauncher(QObject *parent = nullptr);
@@ -118,6 +119,7 @@ public:
     bool lanConnectionEnabled() const;
     bool lanConnected() const;
     bool lanDataEnabled() const;
+    QString lanMode() const;
     void setLanConnectionEnabled(bool value);
     Q_INVOKABLE void testLanConnection();
     Q_INVOKABLE void disconnectLanConnection();
@@ -143,6 +145,7 @@ signals:
     void lanFrequencyReceived(qulonglong frequencyHz);
     void lanConnectionChanged();
     void lanDataEnabledChanged();
+    void lanModeChanged();
 
 private:
     void setStatus(const QString &status);
@@ -177,4 +180,5 @@ private:
     bool m_lanConnectionEnabled = false;
     bool m_lanConnected = false;
     bool m_lanDataEnabled = false;
+    QString m_lanMode;
 };

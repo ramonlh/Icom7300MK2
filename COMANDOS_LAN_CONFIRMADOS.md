@@ -72,23 +72,17 @@ LAN: frecuencia CI-V recibida: 24916000 Hz
 LAN: frecuencia CI-V recibida: 24917000 Hz
 ```
 
+### Cambio de modo y DATA ON/OFF
+
+Confirmado en la radio mediante los comandos CI-V usados por la implementación
+de referencia: `06 <modo> <filtro>` para el modo seleccionado y
+`1A 06 <estado> <filtro-data>` para DATA. Los botones de cambio de modo y el
+control DATA de la interfaz funcionan correctamente durante la sesión LAN.
+
+La recepción y actualización de frecuencia también permanece activa de forma
+continua mientras se utilizan estos controles.
+
 ## Pendientes de confirmación
-
-### Cambio de modo
-
-Trama observada en WFView:
-
-```text
-FE FE 94 E1 26 <modo> FD
-```
-
-Todavía no está marcada como confirmada en nuestro programa.
-
-### DATA ON/OFF
-
-Se está probando mediante la trama de estado de modo CI-V (`26 00` con modo,
-DATA y filtro). **Confirmado por el usuario:** el interruptor DATA cambia el
-estado de la radio por LAN.
 
 ### Escritura de frecuencia
 
@@ -107,4 +101,6 @@ confirmación visual en la pantalla de la radio.
 | 2026-09-03 | Autenticación LAN | Confirmada |
 | 2026-09-03 | Negociación CI-V | Confirmada |
 | 2026-09-03 | Lectura y actualización de frecuencia | Confirmada |
-| 2026-09-03 | DATA ON/OFF por LAN | Confirmada |
+| 2026-09-04 | Botones de cambio de modo por LAN | Confirmados |
+| 2026-09-04 | DATA ON/OFF por LAN | Confirmado |
+| 2026-09-04 | Recepción continua de frecuencia | Confirmada durante cambios de modo y DATA |

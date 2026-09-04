@@ -15,6 +15,7 @@
 #include <QSysInfo>
 #include <QTime>
 #include <QDateTime>
+#include <QDebug>
 
 #include <algorithm>
 
@@ -38,6 +39,50 @@ QByteArray lanPasscode(const QString &input)
         out.append(static_cast<char>(seq[p]));
     }
     return out;
+}
+
+void rememberLanCivPacket(QUdpSocket *owner, const QByteArray &packet)
+{
+    if (!owner || packet.size() < 16)
+        return;
+    const quint16 type = qFromLittleEndian<quint16>(
+        reinterpret_cast<const uchar *>(packet.constData() + 4));
+    if (type != 0)
+        return;
+    const quint16 sequence = qFromLittleEndian<quint16>(
+        reinterpret_cast<const uchar *>(packet.constData() + 6));
+    QVariantMap history = owner->property("lanCivTxHistory").toMap();
+    history.insert(QString::number(sequence), packet);
+    // A few minutes of one-second polling only needs a small rolling window.
+    while (history.size() > 512)
+        history.erase(history.begin());
+    owner->setProperty("lanCivTxHistory", history);
+}
+
+bool resendRememberedLanCivPacket(QUdpSocket *owner, QUdpSocket *stream,
+                                  quint16 sequence, const QString &host)
+{
+    if (!owner || !stream)
+        return false;
+    const QByteArray packet = owner->property("lanCivTxHistory").toMap()
+                                  .value(QString::number(sequence)).toByteArray();
+    const quint16 port = owner->property("lanRemoteCivPort").toUInt() ?: 50002;
+    QByteArray resend = packet;
+    if (resend.isEmpty()) {
+        // The protocol requires an untracked idle carrying the requested
+        // number when the original packet has already left the history.
+        resend = QByteArray(16, '\0');
+        qToLittleEndian<quint32>(16, reinterpret_cast<uchar *>(resend.data()));
+        qToLittleEndian<quint16>(sequence, reinterpret_cast<uchar *>(resend.data() + 6));
+        qToLittleEndian<quint32>(owner->property("lanCivId").toUInt(),
+                                 reinterpret_cast<uchar *>(resend.data() + 8));
+        qToLittleEndian<quint32>(owner->property("lanCivRemoteId").toUInt(),
+                                 reinterpret_cast<uchar *>(resend.data() + 12));
+    }
+    // Icom's reference behaviour sends every requested retransmission twice.
+    stream->writeDatagram(resend, QHostAddress(host), port);
+    stream->writeDatagram(resend, QHostAddress(host), port);
+    return true;
 }
 const QString kDecodiumExecutable = QStringLiteral(
     "/home/ramon/Aplicaciones/Decodium/"
@@ -282,6 +327,7 @@ void ApplicationLauncher::setLanPassword(const QString &value)
 bool ApplicationLauncher::lanConnectionEnabled() const { return m_lanConnectionEnabled; }
 bool ApplicationLauncher::lanConnected() const { return m_lanConnected; }
 bool ApplicationLauncher::lanDataEnabled() const { return m_lanDataEnabled; }
+QString ApplicationLauncher::lanMode() const { return m_lanMode; }
 void ApplicationLauncher::setLanConnectionEnabled(bool value)
 {
     if (value == m_lanConnectionEnabled) return;
@@ -297,6 +343,9 @@ void ApplicationLauncher::testLanConnection()
 {
     // The IC-7300 accepts a single authenticated LAN session. Always dispose
     // of sockets from a previous attempt before starting a new handshake.
+    // Send the protocol close/token-removal sequence first; merely deleting
+    // the sockets leaves the radio-side stream occupied for later launches.
+    shutdownLanConnection();
     const auto previousSockets = findChildren<QUdpSocket *>();
     for (QUdpSocket *old : previousSockets) {
         if (old->property("lanRemoteId").isValid()
@@ -423,9 +472,9 @@ void ApplicationLauncher::testLanConnection()
                                 qToLittleEndian<quint32>(socket->property("lanRemoteId").toUInt(), reinterpret_cast<uchar *>(open.data()+12));
                                 qToLittleEndian<quint16>(0x01c0, reinterpret_cast<uchar *>(open.data()+16));
                                 qToBigEndian<quint16>(0, reinterpret_cast<uchar *>(open.data()+19));
-                                open[21] = char(0x04);
+                                open[21] = char(0x05);
                                 civ->writeDatagram(open, QHostAddress(host), socket->property("lanRemoteCivPort").toUInt() ?: 50002);
-                                const QByteArray civFrame = QByteArray::fromHex("FE FE 94 E1 25 00 FD");
+                                const QByteArray civFrame = QByteArray::fromHex("FE FE 94 E0 25 00 FD");
                                 QByteArray data(21, '\0');
                                 qToLittleEndian<quint32>(21 + civFrame.size(), reinterpret_cast<uchar *>(data.data()));
                                 const quint16 dataSeq = quint16(socket->property("lanCivTransportSeq").toUInt());
@@ -545,6 +594,13 @@ void ApplicationLauncher::testLanConnection()
                 QByteArray tokenPacket(0x40, '\0');
                 qToLittleEndian<quint32>(0x40, reinterpret_cast<uchar *>(tokenPacket.data()));
                 qToLittleEndian<quint16>(0, reinterpret_cast<uchar *>(tokenPacket.data()+4));
+                // Login used tracked sequence 1.  Every following packet-0
+                // on the control stream must share one monotonically
+                // increasing outer sequence.
+                socket->setProperty("lanControlTransportSeq", 2u);
+                const quint16 tokenSeq = quint16(socket->property("lanControlTransportSeq").toUInt());
+                qToLittleEndian<quint16>(tokenSeq, reinterpret_cast<uchar *>(tokenPacket.data()+6));
+                socket->setProperty("lanControlTransportSeq", quint32(tokenSeq + 1));
                 qToLittleEndian<quint32>(id, reinterpret_cast<uchar *>(tokenPacket.data()+8));
                 const quint32 savedRemoteId = socket->property("lanRemoteId").toUInt();
                 qToLittleEndian<quint32>(savedRemoteId, reinterpret_cast<uchar *>(tokenPacket.data()+12));
@@ -555,6 +611,7 @@ void ApplicationLauncher::testLanConnection()
                 qToLittleEndian<quint16>(expected, reinterpret_cast<uchar *>(tokenPacket.data()+26));
                 qToLittleEndian<quint32>(token, reinterpret_cast<uchar *>(tokenPacket.data()+28));
                 socket->writeDatagram(tokenPacket, QHostAddress(host), 50001);
+                socket->setProperty("lanControlLastTrackedMs", QDateTime::currentMSecsSinceEpoch());
                 setStatus(QStringLiteral("LAN: token enviado; sesión autenticada"));
                 auto *tokenRenew = new QTimer(socket);
                 tokenRenew->setInterval(60000);
@@ -563,6 +620,9 @@ void ApplicationLauncher::testLanConnection()
                     QByteArray renew(0x40, '\0');
                     qToLittleEndian<quint32>(0x40, reinterpret_cast<uchar *>(renew.data()));
                     qToLittleEndian<quint16>(0, reinterpret_cast<uchar *>(renew.data()+4));
+                    const quint16 outerSeq = quint16(socket->property("lanControlTransportSeq").toUInt());
+                    qToLittleEndian<quint16>(outerSeq, reinterpret_cast<uchar *>(renew.data()+6));
+                    socket->setProperty("lanControlTransportSeq", quint32(outerSeq + 1));
                     qToLittleEndian<quint32>(id, reinterpret_cast<uchar *>(renew.data()+8));
                     qToLittleEndian<quint32>(socket->property("lanRemoteId").toUInt(), reinterpret_cast<uchar *>(renew.data()+12));
                     qToBigEndian<quint32>(0x30, reinterpret_cast<uchar *>(renew.data()+16));
@@ -573,6 +633,7 @@ void ApplicationLauncher::testLanConnection()
                     qToLittleEndian<quint16>(socket->property("lanTokRequest").toUInt(), reinterpret_cast<uchar *>(renew.data()+26));
                     qToLittleEndian<quint32>(socket->property("lanToken").toUInt(), reinterpret_cast<uchar *>(renew.data()+28));
                     socket->writeDatagram(renew, QHostAddress(host), 50001);
+                    socket->setProperty("lanControlLastTrackedMs", QDateTime::currentMSecsSinceEpoch());
                 });
                 tokenRenew->start();
                 // Reserve an ephemeral audio socket as WFView does.  The
@@ -600,6 +661,7 @@ void ApplicationLauncher::testLanConnection()
                                 continue;
                             if (static_cast<uchar>(p.at(16)) == 0) {
                                 const quint32 radioId = qFromLittleEndian<quint32>(reinterpret_cast<const uchar *>(p.constData()+8));
+                                socket->setProperty("lanAudioRemoteId", radioId);
                                 p[16] = char(1);
                                 qToLittleEndian<quint32>(quint32(audioSocket->localPort()), reinterpret_cast<uchar *>(p.data()+8));
                                 qToLittleEndian<quint32>(radioId, reinterpret_cast<uchar *>(p.data()+12));
@@ -631,16 +693,17 @@ void ApplicationLauncher::testLanConnection()
                     socket->setProperty("lanLastCivDataMs", qint64(QDateTime::currentMSecsSinceEpoch()));
                     socket->setProperty("lanCivSocket", QVariant::fromValue(static_cast<QObject *>(civSocket)));
                     auto *civPing = new QTimer(civSocket);
-                    // WFView's PING_PERIOD is 100 ms; the IC-7300 expires a
-                    // secondary CI-V channel quickly when these are slower.
-                    civPing->setInterval(100);
+                    // Packet type 7 is a liveness/latency probe.  Reference
+                    // clients send it every three seconds; sending it every
+                    // 100 ms needlessly floods the radio and eventually
+                    // destabilises the secondary CI-V stream.
+                    civPing->setInterval(3000);
                     connect(civPing, &QTimer::timeout, civSocket, [civSocket, socket, host]() {
                         QByteArray ping(21, '\0');
                         qToLittleEndian<quint32>(21, reinterpret_cast<uchar *>(ping.data()));
                         qToLittleEndian<quint16>(7, reinterpret_cast<uchar *>(ping.data()+4));
                         const quint16 seq = quint16(socket->property("lanCivPingSeq").toUInt());
                         qToLittleEndian<quint16>(seq, reinterpret_cast<uchar *>(ping.data()+6));
-                        socket->setProperty("lanCivPingSeq", quint32(seq + 1));
                         qToLittleEndian<quint32>(socket->property("lanCivId").toUInt(), reinterpret_cast<uchar *>(ping.data()+8));
                         qToLittleEndian<quint32>(socket->property("lanCivRemoteId").toUInt(), reinterpret_cast<uchar *>(ping.data()+12));
                         // The ping packet has a one-byte reply field at 0x10;
@@ -651,12 +714,12 @@ void ApplicationLauncher::testLanConnection()
                         civSocket->writeDatagram(ping, QHostAddress(host), socket->property("lanRemoteCivPort").toUInt() ?: 50002);
                     });
                     civPing->start();
-                    // WFView keeps each UDP stream alive with untracked idle
-                    // control packets roughly every 100 ms.  Without these
-                    // packets the IC-7300 stops forwarding CI-V updates after
-                    // a short period even though authentication remains valid.
+                    // Send a tracked idle packet only after one second without
+                    // application data, matching the reference packet-0
+                    // cadence.  A 100 ms stream consumes the radio's sequence
+                    // window in roughly two minutes.
                     auto *civIdle = new QTimer(civSocket);
-                    civIdle->setInterval(100);
+                    civIdle->setInterval(1000);
                     connect(civIdle, &QTimer::timeout, civSocket, [civSocket, socket, host]() {
                         QByteArray idle(16, '\0');
                         qToLittleEndian<quint32>(16, reinterpret_cast<uchar *>(idle.data()));
@@ -690,7 +753,8 @@ void ApplicationLauncher::testLanConnection()
                         const quint16 civSeq = quint16(socket->property("lanCivSeq").toUInt());
                         qToBigEndian<quint16>(civSeq, reinterpret_cast<uchar *>(q.data()+19));
                         socket->setProperty("lanCivSeq", quint32(civSeq + 1));
-                        q.replace(21, 6, QByteArray::fromHex("FE FE 94 E1 25 00 FD"));
+                        q.replace(21, 6, QByteArray::fromHex("FE FE 94 E0 25 00 FD"));
+                        rememberLanCivPacket(socket, q);
                         civSocket->writeDatagram(q, QHostAddress(host), socket->property("lanRemoteCivPort").toUInt() ?: 50002);
                     });
                     freqPollEarly->start();
@@ -715,7 +779,8 @@ void ApplicationLauncher::testLanConnection()
                         qToLittleEndian<quint32>(civId, reinterpret_cast<uchar *>(open.data()+8));
                         qToLittleEndian<quint32>(remoteId, reinterpret_cast<uchar *>(open.data()+12));
                         qToLittleEndian<quint16>(0x01c0, reinterpret_cast<uchar *>(open.data()+16));
-                        open[21] = char(0x04);
+                        open[21] = char(0x05);
+                        rememberLanCivPacket(socket, open);
                         civSocket->writeDatagram(open, QHostAddress(host), port);
                         QByteArray query(27, '\0');
                         qToLittleEndian<quint32>(28, reinterpret_cast<uchar *>(query.data()));
@@ -726,7 +791,8 @@ void ApplicationLauncher::testLanConnection()
                         qToLittleEndian<quint32>(remoteId, reinterpret_cast<uchar *>(query.data()+12));
                         query[16] = char(0xc1);
                         qToLittleEndian<quint16>(7, reinterpret_cast<uchar *>(query.data()+17));
-                        query.replace(21, 6, QByteArray::fromHex("FE FE 94 E1 25 00 FD"));
+                        query.replace(21, 6, QByteArray::fromHex("FE FE 94 E0 25 00 FD"));
+                        rememberLanCivPacket(socket, query);
                         civSocket->writeDatagram(query, QHostAddress(host), port);
                         socket->setProperty("lanLastCivDataMs", qint64(QDateTime::currentMSecsSinceEpoch()));
                     });
@@ -742,6 +808,18 @@ void ApplicationLauncher::testLanConnection()
                             // radio to retransmit any gap we detect.
                             const quint16 civPacketType = civ.size() >= 6
                                     ? qFromLittleEndian<quint16>(reinterpret_cast<const uchar *>(civ.constData()+4)) : 0xffff;
+                            if (civ.size() != 16 || civPacketType != 0) {
+                                const quint16 rxSeq = civ.size() >= 8
+                                        ? qFromLittleEndian<quint16>(reinterpret_cast<const uchar *>(civ.constData()+6)) : 0xffff;
+                                const quint32 sourceId = civ.size() >= 12
+                                        ? qFromLittleEndian<quint32>(reinterpret_cast<const uchar *>(civ.constData()+8)) : 0;
+                                const quint32 destinationId = civ.size() >= 16
+                                        ? qFromLittleEndian<quint32>(reinterpret_cast<const uchar *>(civ.constData()+12)) : 0;
+                                qInfo().noquote() << QStringLiteral("LAN-RX size=%1 type=%2 seq=%3 sid=%4 did=%5 head=%6")
+                                    .arg(civ.size()).arg(civPacketType).arg(rxSeq)
+                                    .arg(sourceId).arg(destinationId)
+                                    .arg(QString::fromLatin1(civ.left(40).toHex(' ')));
+                            }
                             if (civ.size() == 21 && civPacketType == 7) {
                                 const uchar replyKind = static_cast<uchar>(civ.at(16));
                                 const quint16 pingSeq = qFromLittleEndian<quint16>(reinterpret_cast<const uchar *>(civ.constData()+6));
@@ -756,6 +834,29 @@ void ApplicationLauncher::testLanConnection()
                                            && pingSeq == quint16(socket->property("lanCivPingSeq").toUInt())) {
                                     socket->setProperty("lanCivPingSeq", quint32(pingSeq + 1));
                                 }
+                                continue;
+                            }
+                            if (civ.size() >= 18 && civPacketType == 1) {
+                                int resent = 0;
+                                int requestedCount = 0;
+                                // IC-7300MK2 uses a compact start/end range
+                                // after the 16-byte header (observed length 20).
+                                for (int offset = 16; offset + 3 < civ.size(); offset += 4) {
+                                    quint16 start = qFromLittleEndian<quint16>(
+                                        reinterpret_cast<const uchar *>(civ.constData() + offset));
+                                    const quint16 end = qFromLittleEndian<quint16>(
+                                        reinterpret_cast<const uchar *>(civ.constData() + offset + 2));
+                                    for (;;) {
+                                        ++requestedCount;
+                                        if (resendRememberedLanCivPacket(socket, civSocket, start, host))
+                                            ++resent;
+                                        if (start == end)
+                                            break;
+                                        ++start;
+                                    }
+                                }
+                                qInfo().noquote() << QStringLiteral("LAN-TX retransmisión solicitada: %1 de %2 paquetes reenviados")
+                                    .arg(resent).arg(requestedCount);
                                 continue;
                             }
                             if (civ.size() > 21 && civPacketType == 0) {
@@ -802,7 +903,8 @@ void ApplicationLauncher::testLanConnection()
                                 qToLittleEndian<quint32>(civId, reinterpret_cast<uchar *>(open.data()+8));
                                 qToLittleEndian<quint32>(remoteId, reinterpret_cast<uchar *>(open.data()+12));
                                 qToLittleEndian<quint16>(0x01c0, reinterpret_cast<uchar *>(open.data()+16));
-                                open[21] = char(0x04);
+                                open[21] = char(0x05);
+                                rememberLanCivPacket(socket, open);
                                 civSocket->writeDatagram(open, QHostAddress(host), 50002);
                                 for (int retry = 1; retry <= 8; ++retry) QTimer::singleShot(retry * 100, civSocket, [civSocket, socket, host, open]() {
                                     civSocket->writeDatagram(open, QHostAddress(host), socket->property("lanRemoteCivPort").toUInt() ?: 50002);
@@ -817,7 +919,8 @@ void ApplicationLauncher::testLanConnection()
                                     qToLittleEndian<quint32>(remoteId2, reinterpret_cast<uchar *>(query.data()+12));
                                     query[16] = char(0xc1);
                                     qToLittleEndian<quint16>(7, reinterpret_cast<uchar *>(query.data()+17));
-                                    query.replace(21, 6, QByteArray::fromHex("FE FE 94 E1 25 00 FD"));
+                                    query.replace(21, 6, QByteArray::fromHex("FE FE 94 E0 25 00 FD"));
+                                    rememberLanCivPacket(socket, query);
                                     civSocket->writeDatagram(query, QHostAddress(host), socket->property("lanRemoteCivPort").toUInt() ?: 50002);
                                     // Some IC-7300 firmware accepts CI-V
                                     // polling on E1 (the same source used by
@@ -833,7 +936,8 @@ void ApplicationLauncher::testLanConnection()
                                         qToLittleEndian<quint32>(socket->property("lanCivRemoteId").toUInt(), reinterpret_cast<uchar *>(alt.data()+12));
                                         alt[16] = char(0xc1);
                                         qToLittleEndian<quint16>(7, reinterpret_cast<uchar *>(alt.data()+17));
-                                        alt.replace(21, 6, QByteArray::fromHex("FE FE 94 E1 25 00 FD"));
+                                        alt.replace(21, 6, QByteArray::fromHex("FE FE 94 E0 25 00 FD"));
+                                        rememberLanCivPacket(socket, alt);
                                         civSocket->writeDatagram(alt, QHostAddress(host), socket->property("lanRemoteCivPort").toUInt() ?: 50002);
                                     });
                                 });
@@ -864,7 +968,8 @@ void ApplicationLauncher::testLanConnection()
                                             qToLittleEndian<quint16>(7, reinterpret_cast<uchar *>(q.data()+17));
                                             qToBigEndian<quint16>(socket->property("lanCivSeq").toUInt(), reinterpret_cast<uchar *>(q.data()+19));
                                             socket->setProperty("lanCivSeq", socket->property("lanCivSeq").toUInt() + 1);
-                                            q.replace(21, 6, QByteArray::fromHex("FE FE 94 E1 25 00 FD"));
+                                            q.replace(21, 6, QByteArray::fromHex("FE FE 94 E0 25 00 FD"));
+                                            rememberLanCivPacket(socket, q);
                                             civSocket->writeDatagram(q, QHostAddress(host), socket->property("lanRemoteCivPort").toUInt() ?: 50002);
                                         });
                                         freqPoll->start();
@@ -883,8 +988,9 @@ void ApplicationLauncher::testLanConnection()
                                             qToLittleEndian<quint16>(7, reinterpret_cast<uchar *>(q.data()+17));
                                             qToBigEndian<quint16>(quint16(socket->property("lanCivSeq").toUInt()), reinterpret_cast<uchar *>(q.data()+19));
                                             socket->setProperty("lanCivSeq", socket->property("lanCivSeq").toUInt() + 1);
-                                            q.replace(21, 6, QByteArray::fromHex("FE FE 94 E1 1A 06"));
+                                            q.replace(21, 6, QByteArray::fromHex("FE FE 94 E0 1A 06"));
                                             q.append(char(0xfd));
+                                            rememberLanCivPacket(socket, q);
                                             civSocket->writeDatagram(q, QHostAddress(host), socket->property("lanRemoteCivPort").toUInt() ?: 50002);
                                         });
                                     }
@@ -926,6 +1032,24 @@ void ApplicationLauncher::testLanConnection()
                                     }
                                 }
                                 for (int off = 0; off + 10 < frame.size(); ++off) {
+                                // Reply to the explicit selected-VFO query:
+                                // FE FE E0 94 25 00 [five BCD bytes] FD.
+                                if (static_cast<unsigned char>(frame.at(off)) == 0xfe
+                                    && static_cast<unsigned char>(frame.at(off + 1)) == 0xfe
+                                    && static_cast<unsigned char>(frame.at(off + 2)) == 0xe0
+                                    && static_cast<unsigned char>(frame.at(off + 3)) == 0x94
+                                    && static_cast<unsigned char>(frame.at(off + 4)) == 0x25
+                                    && static_cast<unsigned char>(frame.at(off + 5)) == 0x00) {
+                                    quint64 hz = 0, mult = 1;
+                                    for (int i = 6; i < 11; ++i) {
+                                        const unsigned char b = static_cast<unsigned char>(frame.at(off + i));
+                                        hz += ((b & 0x0f) + ((b >> 4) * 10)) * mult;
+                                        mult *= 100;
+                                    }
+                                    setStatus(QStringLiteral("LAN: frecuencia consultada: %1 Hz").arg(hz));
+                                    emit lanFrequencyReceived(hz);
+                                    break;
+                                }
                                 // IC-7300 LAN unsolicited frequency status:
                                 // FE FE 00 94 00 00 [five BCD bytes] FD.
                                 if (static_cast<unsigned char>(frame.at(off)) == 0xfe
@@ -967,7 +1091,9 @@ void ApplicationLauncher::testLanConnection()
                 QByteArray conn(0x90, '\0');
                 qToLittleEndian<quint32>(0x90, reinterpret_cast<uchar *>(conn.data()));
                 qToLittleEndian<quint16>(0, reinterpret_cast<uchar *>(conn.data()+4));
-                qToLittleEndian<quint16>(2, reinterpret_cast<uchar *>(conn.data()+6));
+                const quint16 connOuterSeq = quint16(socket->property("lanControlTransportSeq").toUInt());
+                qToLittleEndian<quint16>(connOuterSeq, reinterpret_cast<uchar *>(conn.data()+6));
+                socket->setProperty("lanControlTransportSeq", quint32(connOuterSeq + 1));
                 qToLittleEndian<quint32>(id, reinterpret_cast<uchar *>(conn.data()+8));
                 qToLittleEndian<quint32>(savedRemoteId, reinterpret_cast<uchar *>(conn.data()+12));
                 qToBigEndian<quint32>(0x80, reinterpret_cast<uchar *>(conn.data()+16));
@@ -999,11 +1125,11 @@ void ApplicationLauncher::testLanConnection()
                 qToBigEndian<quint32>(320, reinterpret_cast<uchar *>(conn.data()+0x84));
                 conn[0x88] = 1;
                 socket->writeDatagram(conn, QHostAddress(host), 50001);
+                socket->setProperty("lanControlLastTrackedMs", QDateTime::currentMSecsSinceEpoch());
                 socket->setProperty("lanConnPacket", conn);
-                socket->setProperty("lanPingSeq", 0u);
                 socket->setProperty("lanControlPingSeq", 0u);
                 auto *controlPing = new QTimer(socket);
-                controlPing->setInterval(100);
+                controlPing->setInterval(3000);
                 connect(controlPing, &QTimer::timeout, socket, [socket, host, id]() {
                     if (!socket->property("lanConnected").toBool()) return;
                     QByteArray ping(21, '\0');
@@ -1020,18 +1146,21 @@ void ApplicationLauncher::testLanConnection()
                 });
                 controlPing->start();
                 auto *controlIdle = new QTimer(socket);
-                controlIdle->setInterval(100);
+                controlIdle->setInterval(1000);
                 connect(controlIdle, &QTimer::timeout, socket, [socket, host, id]() {
                     if (!socket->property("lanConnected").toBool()) return;
+                    const qint64 lastTracked = socket->property("lanControlLastTrackedMs").toLongLong();
+                    if (QDateTime::currentMSecsSinceEpoch() - lastTracked < 1000) return;
                     QByteArray idle(16, '\0');
                     qToLittleEndian<quint32>(16, reinterpret_cast<uchar *>(idle.data()));
                     qToLittleEndian<quint16>(0, reinterpret_cast<uchar *>(idle.data()+4));
-                    const quint16 idleSeq = quint16(socket->property("lanPingSeq").toUInt());
+                    const quint16 idleSeq = quint16(socket->property("lanControlTransportSeq").toUInt());
                     qToLittleEndian<quint16>(idleSeq, reinterpret_cast<uchar *>(idle.data()+6));
-                    socket->setProperty("lanPingSeq", quint32(idleSeq + 1));
+                    socket->setProperty("lanControlTransportSeq", quint32(idleSeq + 1));
                     qToLittleEndian<quint32>(id, reinterpret_cast<uchar *>(idle.data()+8));
                     qToLittleEndian<quint32>(socket->property("lanRemoteId").toUInt(), reinterpret_cast<uchar *>(idle.data()+12));
                     socket->writeDatagram(idle, QHostAddress(host), 50001);
+                    socket->setProperty("lanControlLastTrackedMs", QDateTime::currentMSecsSinceEpoch());
                 });
                 controlIdle->start();
                 socket->setProperty("lanConnSent", true);
@@ -1090,37 +1219,48 @@ void ApplicationLauncher::shutdownLanConnection()
         for (const char *prop : {"lanCivSocket", "lanAudioSocket"}) {
             auto *stream = qobject_cast<QUdpSocket *>(s->property(prop).value<QObject *>());
             if (!stream) continue;
-            QByteArray close(16, '\0');
-            qToLittleEndian<quint32>(16, reinterpret_cast<uchar *>(close.data()));
-            qToLittleEndian<quint16>(5, reinterpret_cast<uchar *>(close.data()+4));
-            qToLittleEndian<quint32>(s->property("lanCivId").toUInt(), reinterpret_cast<uchar *>(close.data()+8));
-            qToLittleEndian<quint32>(s->property("lanRemoteId").toUInt(), reinterpret_cast<uchar *>(close.data()+12));
-            const quint16 remotePort = (QString::fromLatin1(prop) == QStringLiteral("lanCivSocket"))
+            const bool isCiv = QString::fromLatin1(prop) == QStringLiteral("lanCivSocket");
+            const quint32 localStreamId = isCiv
+                    ? s->property("lanCivId").toUInt()
+                    : quint32(stream->localPort());
+            const quint32 remoteStreamId = isCiv
+                    ? s->property("lanCivRemoteId").toUInt()
+                    : s->property("lanAudioRemoteId").toUInt();
+            const quint16 remotePort = isCiv
                     ? quint16(s->property("lanRemoteCivPort").toUInt() ?: 50002)
                     : quint16(s->property("lanRemoteAudioPort").toUInt() ?: 50003);
-            stream->writeDatagram(close, QHostAddress(host), remotePort);
-            if (QString::fromLatin1(prop) == QStringLiteral("lanCivSocket")) {
+
+            // Close the serial protocol before disconnecting its UDP stream.
+            if (isCiv && remoteStreamId) {
                 QByteArray openClose(0x16, '\0');
                 qToLittleEndian<quint32>(0x16, reinterpret_cast<uchar *>(openClose.data()));
                 const quint16 seq = quint16(s->property("lanCivTransportSeq").toUInt());
                 qToLittleEndian<quint16>(seq, reinterpret_cast<uchar *>(openClose.data()+6));
                 s->setProperty("lanCivTransportSeq", quint32(seq + 1));
-                qToLittleEndian<quint32>(s->property("lanCivId").toUInt(), reinterpret_cast<uchar *>(openClose.data()+8));
-                qToLittleEndian<quint32>(s->property("lanRemoteId").toUInt(), reinterpret_cast<uchar *>(openClose.data()+12));
+                qToLittleEndian<quint32>(localStreamId, reinterpret_cast<uchar *>(openClose.data()+8));
+                qToLittleEndian<quint32>(remoteStreamId, reinterpret_cast<uchar *>(openClose.data()+12));
                 qToLittleEndian<quint16>(0x01c0, reinterpret_cast<uchar *>(openClose.data()+16));
                 qToBigEndian<quint16>(quint16(s->property("lanCivSeq").toUInt()), reinterpret_cast<uchar *>(openClose.data()+19));
                 openClose[21] = char(0x00);
                 stream->writeDatagram(openClose, QHostAddress(host), remotePort);
             }
+
+            QByteArray close(16, '\0');
+            qToLittleEndian<quint32>(16, reinterpret_cast<uchar *>(close.data()));
+            qToLittleEndian<quint16>(5, reinterpret_cast<uchar *>(close.data()+4));
+            qToLittleEndian<quint32>(localStreamId, reinterpret_cast<uchar *>(close.data()+8));
+            qToLittleEndian<quint32>(remoteStreamId, reinterpret_cast<uchar *>(close.data()+12));
+            if (remoteStreamId)
+                stream->writeDatagram(close, QHostAddress(host), remotePort);
             stream->close();
         }
         // Token packet layout matches WFView's token_packet exactly.
         QByteArray token(0x40, '\0');
         qToLittleEndian<quint32>(0x40, reinterpret_cast<uchar *>(token.data()));
         qToLittleEndian<quint16>(0, reinterpret_cast<uchar *>(token.data()+4));
-        const quint16 seq = quint16(s->property("lanPingSeq").toUInt());
+        const quint16 seq = quint16(s->property("lanControlTransportSeq").toUInt());
         qToLittleEndian<quint16>(seq, reinterpret_cast<uchar *>(token.data()+6));
-        s->setProperty("lanPingSeq", quint32(seq + 1));
+        s->setProperty("lanControlTransportSeq", quint32(seq + 1));
         qToLittleEndian<quint32>(s->property("lanId").toUInt(), reinterpret_cast<uchar *>(token.data()+8));
         qToLittleEndian<quint32>(s->property("lanRemoteId").toUInt(), reinterpret_cast<uchar *>(token.data()+12));
         qToBigEndian<quint32>(0x30, reinterpret_cast<uchar *>(token.data()+16));
@@ -1137,7 +1277,7 @@ void ApplicationLauncher::shutdownLanConnection()
         QByteArray disconnect(16, '\0');
         qToLittleEndian<quint32>(16, reinterpret_cast<uchar *>(disconnect.data()));
         qToLittleEndian<quint16>(5, reinterpret_cast<uchar *>(disconnect.data()+4));
-        const quint16 dseq = quint16(s->property("lanPingSeq").toUInt());
+        const quint16 dseq = quint16(s->property("lanControlTransportSeq").toUInt());
         qToLittleEndian<quint16>(dseq, reinterpret_cast<uchar *>(disconnect.data()+6));
         qToLittleEndian<quint32>(s->property("lanId").toUInt(), reinterpret_cast<uchar *>(disconnect.data()+8));
         qToLittleEndian<quint32>(s->property("lanRemoteId").toUInt(), reinterpret_cast<uchar *>(disconnect.data()+12));
@@ -1177,10 +1317,9 @@ void ApplicationLauncher::testLanModeName(const QString &mode)
                            ?: owner->property("lanRemoteId").toUInt();
     const QHash<QString, quint8> modeCodes{{QStringLiteral("LSB"),0x00},{QStringLiteral("USB"),0x01},{QStringLiteral("AM"),0x02},{QStringLiteral("CW"),0x03},{QStringLiteral("RTTY"),0x04},{QStringLiteral("FM"),0x05},{QStringLiteral("CW-R"),0x07},{QStringLiteral("RTTY-R"),0x08}};
     const quint8 code = modeCodes.value(mode, 0x01);
-    // WFView writes the mode with the compact CI-V command (mode byte only).
-    // The longer 26 00 / mode / data / filter form is a read/state frame and
-    // is ignored by the IC-7300 when used as a mode write.
-    QByteArray civ = QByteArray::fromHex("FE FE 94 E1 26 01 FD");
+    // Command 0x06 changes the selected VFO's operating mode and filter.
+    // Command 0x26 is reserved for the extended main/sub VFO state form.
+    QByteArray civ = QByteArray::fromHex("FE FE 94 E0 06 01 01 FD");
     civ[5] = char(code);
     QByteArray packet(21, '\0');
     qToLittleEndian<quint32>(21 + civ.size(), reinterpret_cast<uchar *>(packet.data()));
@@ -1194,8 +1333,27 @@ void ApplicationLauncher::testLanModeName(const QString &mode)
     qToBigEndian<quint16>(quint16(owner->property("lanCivSeq").toUInt()), reinterpret_cast<uchar *>(packet.data()+19));
     owner->setProperty("lanCivSeq", owner->property("lanCivSeq").toUInt() + 1);
     packet.append(civ);
-    civSocket->writeDatagram(packet, QHostAddress(m_lanHost), owner->property("lanRemoteCivPort").toUInt() ?: 50002);
-    setStatus(QStringLiteral("LAN: comando de modo %1 enviado por CI-V (E1): %2").arg(mode, civ.toHex(' ')));
+    const QHostAddress destination(m_lanHost);
+    const quint16 destinationPort = owner->property("lanRemoteCivPort").toUInt() ?: 50002;
+    rememberLanCivPacket(owner, packet);
+    civSocket->writeDatagram(packet, destination, destinationPort);
+    // UDP does not guarantee delivery.  Retransmit the exact tracked packet
+    // (same transport and CI-V sequence numbers), as required by the Icom
+    // packet-0 protocol, instead of creating a new command sequence.
+    QTimer::singleShot(120, civSocket, [civSocket, packet, destination, destinationPort]() {
+        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+    });
+    QTimer::singleShot(320, civSocket, [civSocket, packet, destination, destinationPort]() {
+        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+    });
+    // Keep the LAN UI coherent with the accepted user command.  CI-V mode
+    // writes are not followed by a mode-status frame on this radio; DATA uses
+    // the same immediate UI update strategy and later queries can correct it.
+    if (m_lanMode != mode) {
+        m_lanMode = mode;
+        emit lanModeChanged();
+    }
+    setStatus(QStringLiteral("LAN: comando de modo %1 enviado por CI-V con reintento: %2").arg(mode, civ.toHex(' ')));
 }
 
 void ApplicationLauncher::setLanFrequency(qulonglong frequencyHz)
@@ -1216,7 +1374,7 @@ void ApplicationLauncher::setLanFrequency(qulonglong frequencyHz)
     const quint32 remoteId = owner->property("lanCivRemoteId").toUInt()
                            ?: owner->property("lanRemoteId").toUInt();
     if (!remoteId) return;
-    QByteArray civ = QByteArray::fromHex("FE FE 94 E1 25 00");
+    QByteArray civ = QByteArray::fromHex("FE FE 94 E0 25 00");
     quint64 value = frequencyHz;
     for (int i = 0; i < 5; ++i) {
         const quint8 lo = quint8(value % 10); value /= 10;
@@ -1229,15 +1387,24 @@ void ApplicationLauncher::setLanFrequency(qulonglong frequencyHz)
     const quint16 seq = quint16(owner->property("lanCivTransportSeq").toUInt());
     qToLittleEndian<quint16>(seq, reinterpret_cast<uchar *>(packet.data()+6));
     owner->setProperty("lanCivTransportSeq", quint32(seq + 1));
-    qToLittleEndian<quint32>(remoteId, reinterpret_cast<uchar *>(packet.data()+8));
-    qToLittleEndian<quint32>(owner->property("lanCivId").toUInt(), reinterpret_cast<uchar *>(packet.data()+12));
+    qToLittleEndian<quint32>(owner->property("lanCivId").toUInt(), reinterpret_cast<uchar *>(packet.data()+8));
+    qToLittleEndian<quint32>(remoteId, reinterpret_cast<uchar *>(packet.data()+12));
     packet[16] = char(0xc1);
     qToLittleEndian<quint16>(civ.size(), reinterpret_cast<uchar *>(packet.data()+17));
     const quint16 civSeq = quint16(owner->property("lanCivSeq").toUInt());
     qToBigEndian<quint16>(civSeq, reinterpret_cast<uchar *>(packet.data()+19));
     owner->setProperty("lanCivSeq", quint32(civSeq + 1));
     packet.append(civ);
-    civSocket->writeDatagram(packet, QHostAddress(m_lanHost), owner->property("lanRemoteCivPort").toUInt() ?: 50002);
+    const QHostAddress destination(m_lanHost);
+    const quint16 destinationPort = owner->property("lanRemoteCivPort").toUInt() ?: 50002;
+    rememberLanCivPacket(owner, packet);
+    civSocket->writeDatagram(packet, destination, destinationPort);
+    QTimer::singleShot(120, civSocket, [civSocket, packet, destination, destinationPort]() {
+        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+    });
+    QTimer::singleShot(320, civSocket, [civSocket, packet, destination, destinationPort]() {
+        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+    });
     setStatus(QStringLiteral("LAN: frecuencia %1 Hz enviada por CI-V").arg(frequencyHz));
 }
 
@@ -1253,12 +1420,11 @@ void ApplicationLauncher::setLanDataEnabled(bool enabled, const QString &mode)
         return;
     }
     const quint32 remoteId = owner->property("lanCivRemoteId").toUInt() ?: owner->property("lanRemoteId").toUInt();
-    const QHash<QString, quint8> modeCodes{{QStringLiteral("LSB"),0x00},{QStringLiteral("USB"),0x01},{QStringLiteral("AM"),0x02},{QStringLiteral("CW"),0x03},{QStringLiteral("RTTY"),0x04},{QStringLiteral("FM"),0x05},{QStringLiteral("CW-R"),0x07},{QStringLiteral("RTTY-R"),0x08}};
-    const quint8 modeCode = modeCodes.value(mode, 0x01);
-    // DATA is part of the standard CI-V 0x26 mode command.  The previous
-    // 0x1A/0x06 packet is a different radio function and is ignored here.
-    QByteArray civ = QByteArray::fromHex("FE FE 94 E1 26 00 01 00 01 FD");
-    civ[6] = char(modeCode);
+    Q_UNUSED(mode);
+    // DATA mode on current Icom radios is controlled by 1A 06.  The final
+    // filter byte is 1 when enabling DATA and 0 when disabling it.
+    QByteArray civ = QByteArray::fromHex("FE FE 94 E0 1A 06 00 00 FD");
+    civ[6] = char(enabled ? 0x01 : 0x00);
     civ[7] = char(enabled ? 0x01 : 0x00);
     QByteArray packet(21, '\0');
     qToLittleEndian<quint32>(21 + civ.size(), reinterpret_cast<uchar *>(packet.data()));
@@ -1269,7 +1435,16 @@ void ApplicationLauncher::setLanDataEnabled(bool enabled, const QString &mode)
     qToLittleEndian<quint16>(civ.size(), reinterpret_cast<uchar *>(packet.data()+17));
     qToBigEndian<quint16>(quint16(owner->property("lanCivSeq").toUInt()), reinterpret_cast<uchar *>(packet.data()+19));
     owner->setProperty("lanCivSeq", owner->property("lanCivSeq").toUInt() + 1); packet.append(civ);
-    civSocket->writeDatagram(packet, QHostAddress(m_lanHost), owner->property("lanRemoteCivPort").toUInt() ?: 50002);
+    const QHostAddress destination(m_lanHost);
+    const quint16 destinationPort = owner->property("lanRemoteCivPort").toUInt() ?: 50002;
+    rememberLanCivPacket(owner, packet);
+    civSocket->writeDatagram(packet, destination, destinationPort);
+    QTimer::singleShot(120, civSocket, [civSocket, packet, destination, destinationPort]() {
+        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+    });
+    QTimer::singleShot(320, civSocket, [civSocket, packet, destination, destinationPort]() {
+        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+    });
     if (m_lanDataEnabled != enabled) {
         m_lanDataEnabled = enabled;
         QSettings().setValue(QStringLiteral("lan/dataEnabled"), enabled);
@@ -1606,6 +1781,8 @@ void ApplicationLauncher::stopJs8call()
 
 void ApplicationLauncher::setStatus(const QString &status)
 {
+    qInfo().noquote() << QDateTime::currentDateTime().toString(Qt::ISODateWithMs)
+                      << status;
     if (m_status == status) {
         return;
     }

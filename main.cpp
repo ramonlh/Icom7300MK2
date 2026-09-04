@@ -23,12 +23,24 @@ int main(int argc, char *argv[])
         QStandardPaths::RuntimeLocation);
     if (runtimeDirectory.isEmpty())
         runtimeDirectory = QDir::tempPath();
+    const bool lanDiagnostic = app.arguments().contains(
+        QStringLiteral("--lan-diagnostic"));
     QLockFile instanceLock(
         QDir(runtimeDirectory).filePath(
-            QStringLiteral("Icom7300Mk2Control.lock")));
-    instanceLock.setStaleLockTime(0);
-    if (!instanceLock.tryLock(100))
-        return 0;
+            lanDiagnostic
+                ? QStringLiteral("Icom7300Mk2Control-lan-diagnostic.lock")
+                : QStringLiteral("Icom7300Mk2Control.lock")));
+    // Recover automatically if a diagnostic run or a crash leaves the lock
+    // file behind.  A zero stale time disables age-based recovery entirely.
+    instanceLock.setStaleLockTime(1000);
+    if (!instanceLock.tryLock(100)) {
+        // QLockFile can leave a dead PID behind after SIGTERM (for example
+        // when a timed diagnostic ends).  removeStaleLockFile validates the
+        // recorded process before deleting, so a live instance stays safe.
+        if (!instanceLock.removeStaleLockFile()
+            || !instanceLock.tryLock(100))
+            return 0;
+    }
 
     // La vista compacta sustituye temporalmente a la ventana principal.
     // No se debe terminar el proceso durante ese intercambio; el cierre
@@ -111,6 +123,25 @@ int main(int argc, char *argv[])
             if (!applicationLauncher.lanConnected())
                 applicationLauncher.testLanConnection();
         });
+    }
+
+    // Reproducible LAN soak test.  It is opt-in so normal launches are not
+    // affected: --lan-diagnostic runs mode/DATA probes and exits after five
+    // minutes while the timestamped protocol trace is captured on stderr.
+    if (lanDiagnostic) {
+        QTimer::singleShot(30000, &applicationLauncher, [&applicationLauncher]() {
+            applicationLauncher.testLanModeName(QStringLiteral("LSB"));
+        });
+        QTimer::singleShot(45000, &applicationLauncher, [&applicationLauncher]() {
+            applicationLauncher.testLanModeName(QStringLiteral("USB"));
+        });
+        QTimer::singleShot(60000, &applicationLauncher, [&applicationLauncher]() {
+            applicationLauncher.setLanDataEnabled(true, QStringLiteral("USB"));
+        });
+        QTimer::singleShot(75000, &applicationLauncher, [&applicationLauncher]() {
+            applicationLauncher.setLanDataEnabled(false, QStringLiteral("USB"));
+        });
+        QTimer::singleShot(300000, &app, &QCoreApplication::quit);
     }
 
     // El puerto CI-V debe cerrarse antes de que desaparezca el bucle de
