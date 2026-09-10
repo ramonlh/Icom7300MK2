@@ -116,3 +116,227 @@ Cuando se solicite una nueva función:
 6. Corregir errores de compilación antes de dar el trabajo por terminado.
 7. Indicar los archivos modificados.
 8. No realizar commits automáticamente salvo petición expresa.
+
+## Subsistema Quansheng UV-K5
+
+Este repositorio contiene también, bajo:
+
+    quansheng/
+
+el desarrollo nativo Linux para el Quansheng UV-K5.
+
+Este subsistema procede del proyecto independiente QuanshengDock-Linux y conserva
+su propio contexto, documentación, código y pruebas.
+
+Antes de trabajar en cualquier archivo bajo quansheng/ leer obligatoriamente:
+
+- quansheng/AGENTS.md
+- quansheng/PROJECT_CONTEXT.md
+- quansheng/README.md
+- quansheng/docs/PROTOCOL.md
+
+No asumir que el protocolo Quansheng es CI-V ni reutilizar directamente
+RadioController del Icom para el UV-K5.
+
+Mantener inicialmente separados:
+
+- protocolo Icom CI-V;
+- protocolo QuanshengDock/UV-K5;
+- transporte serie;
+- modelo de estado;
+- autorización TX/PTT.
+
+### Arquitectura física prevista
+
+El IC-7300MK2 está conectado al HP principal.
+
+El Quansheng UV-K5 permanece conectado físicamente por USB al HP Pavilion dv6,
+porque allí el adaptador USB-serie PL2303 ha demostrado funcionar correctamente.
+
+Arquitectura prevista:
+
+    HP principal
+    ~/Icom7300MK2
+        |
+        +-- IC-7300MK2 local
+        |
+        +-- cliente/control Quansheng
+                 |
+                LAN
+                 |
+                 v
+          HP Pavilion dv6
+                 |
+            USB / serie
+                 |
+                 v
+          Quansheng UV-K5
+
+Por tanto, no asumir que /dev/ttyUSB0 del Quansheng existe en el HP principal.
+
+El acceso físico al UV-K5 deberá residir inicialmente en el Pavilion y el
+control desde la aplicación principal deberá diseñarse mediante comunicación LAN.
+
+### Estado actual del Quansheng
+
+Actualmente existe:
+
+- parser de protocolo incremental;
+- soporte de tramas AB CD;
+- decodificación parcial de paquetes UI B5;
+- transporte Qt QSerialPort de solo lectura;
+- qdock-probe;
+- capturas reales reproducibles;
+- tests de parser, CLI y puerto serie.
+
+Todavía NO existe:
+
+- GUI Quansheng terminada;
+- controlador completo de radio;
+- protocolo LAN Pavilion <-> HP principal;
+- modelo normalizado fiable de frecuencia/canal;
+- emisor de comandos habilitado;
+- TX/PTT habilitado.
+
+Consultar quansheng/PROJECT_CONTEXT.md para distinguir siempre entre:
+
+- CONFIRMADO;
+- PARCIALMENTE CONFIRMADO;
+- PENDIENTE.
+
+### Seguridad Quansheng
+
+Hasta nueva instrucción expresa:
+
+- NO flashear firmware.
+- NO ejecutar k5prog -F.
+- NO escribir EEPROM.
+- NO habilitar TX/PTT.
+- NO enviar comandos al UV-K5 solo para probar una hipótesis.
+- Priorizar replay y fixtures antes de pruebas físicas.
+- No modificar servicios del Pavilion sin necesidad explícita.
+
+La integración del Quansheng no debe deteriorar ni reestructurar las funciones
+ya estables del IC-7300MK2.
+
+### Integración
+
+Primero diseñar y probar el subsistema Quansheng de forma independiente.
+
+Después definir una interfaz entre el HP principal y el Pavilion.
+
+Solo posteriormente estudiar una interfaz común de radio para la GUI.
+
+No fusionar prematuramente RadioController del Icom con el controlador Quansheng.
+
+## Subsistema Quansheng UV-K5
+
+Este repositorio contiene también, bajo:
+
+    quansheng/
+
+el desarrollo nativo Linux para el Quansheng UV-K5.
+
+Este subsistema procede del proyecto independiente QuanshengDock-Linux y conserva
+su propio contexto, documentación, código y pruebas.
+
+Antes de trabajar en cualquier archivo bajo quansheng/ leer obligatoriamente:
+
+- quansheng/AGENTS.md
+- quansheng/PROJECT_CONTEXT.md
+- quansheng/README.md
+- quansheng/docs/PROTOCOL.md
+
+No asumir que el protocolo Quansheng es CI-V ni reutilizar directamente
+RadioController del Icom para el UV-K5.
+
+Mantener inicialmente separados:
+
+- protocolo Icom CI-V;
+- protocolo QuanshengDock/UV-K5;
+- transporte serie;
+- modelo de estado;
+- autorización TX/PTT.
+
+### Arquitectura física prevista
+
+El IC-7300MK2 está conectado al HP principal.
+
+El Quansheng UV-K5 permanece conectado físicamente por USB al HP Pavilion dv6,
+porque allí el adaptador USB-serie PL2303 ha demostrado funcionar correctamente.
+
+Arquitectura prevista:
+
+    HP principal
+    ~/Icom7300MK2
+        |
+        +-- IC-7300MK2 local
+        |
+        +-- cliente/control Quansheng
+                 |
+                LAN
+                 |
+                 v
+          HP Pavilion dv6
+                 |
+            USB / serie
+                 |
+                 v
+          Quansheng UV-K5
+
+Por tanto, no asumir que /dev/ttyUSB0 del Quansheng existe en el HP principal.
+
+El acceso físico al UV-K5 deberá residir inicialmente en el Pavilion y el
+control desde la aplicación principal deberá diseñarse mediante comunicación LAN.
+
+### Estado actual del Quansheng
+
+Actualmente existe:
+
+- parser de protocolo incremental;
+- soporte de tramas AB CD;
+- decodificación parcial de paquetes UI B5;
+- transporte Qt QSerialPort de solo lectura;
+- qdock-probe;
+- capturas reales reproducibles;
+- tests de parser, CLI y puerto serie.
+
+Todavía NO existe:
+
+- GUI Quansheng terminada;
+- controlador completo de radio;
+- protocolo LAN Pavilion <-> HP principal;
+- modelo normalizado fiable de frecuencia/canal;
+- emisor de comandos habilitado;
+- TX/PTT habilitado.
+
+Consultar quansheng/PROJECT_CONTEXT.md para distinguir siempre entre:
+
+- CONFIRMADO;
+- PARCIALMENTE CONFIRMADO;
+- PENDIENTE.
+
+### Seguridad Quansheng
+
+Hasta nueva instrucción expresa:
+
+- NO flashear firmware.
+- NO ejecutar k5prog -F.
+- NO escribir EEPROM.
+- NO habilitar TX/PTT.
+- NO enviar comandos al UV-K5 solo para probar una hipótesis.
+- Priorizar replay y fixtures antes de pruebas físicas.
+- No modificar servicios del Pavilion sin necesidad explícita.
+
+La integración del Quansheng no debe deteriorar ni reestructurar las funciones
+ya estables del IC-7300MK2.
+
+### Integración
+
+Primero diseñar y probar el subsistema Quansheng de forma independiente.
+
+Después definir una interfaz entre el HP principal y el Pavilion.
+
+Solo posteriormente estudiar una interfaz común de radio para la GUI.
+
+No fusionar prematuramente RadioController del Icom con el controlador Quansheng.
