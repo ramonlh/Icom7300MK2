@@ -1,0 +1,11 @@
+/build/
+/build-*/
+/cmake-build-*/
+*.user
+*.log
+*.bin
+*.raw
+*.pcap
+*.capture
+reference/
+vendor/
