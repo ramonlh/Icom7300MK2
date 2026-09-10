@@ -15,3 +15,6 @@ com.google.AndroidStudio.desktop
 jetbrains-studio.desktop
 es.ramonlorenzo.AndroidAutoEmulator.desktop
 scripts/arrancar-emulador-auto.sh
+
+# Logs de pruebas LAN
+LAN_*.log
