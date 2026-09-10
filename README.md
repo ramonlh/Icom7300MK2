@@ -94,6 +94,7 @@ Plataforma principal de desarrollo y pruebas:
 - Ajustes de frecuencia por pasos.
 - Pasos de sintonía configurables.
 - Botones de banda.
+- Memoria persistente de la última frecuencia de cada banda, independiente para VFO A y VFO B.
 - Mando de sintonía gráfico.
 
 ### Modos y filtros
@@ -112,6 +113,8 @@ Modos disponibles desde el panel:
 Además:
 
 - DATA ON/OFF.
+- La selección de modo conserva el estado DATA actual, tanto por USB como por LAN.
+
 - FIL1 / FIL2 / FIL3.
 - Curva y forma de filtro.
 - Sincronización del modo y filtro con la radio.
@@ -134,6 +137,22 @@ Además:
 - Posición y anchura del notch.
 - Twin PBT.
 - IP+.
+
+### Controles de recepción por LAN
+
+Los botones existentes P.AMP, ATT, AGC, NB, NR, Auto Notch, Manual Notch e IP+
+y los ajustes AF, RF, SQL, nivel NB, nivel NR y posición del notch utilizan
+también la conexión LAN. La interfaz se actualiza con las respuestas de la
+radio, con una consulta tras cada orden y un ciclo de lectura de unos siete
+segundos para recoger cambios hechos en el frontal.
+
+Las pruebas aisladas de esta ruta pueden ejecutarse con:
+
+```bash
+cmake -S . -B build -DICOM_BUILD_TESTS=ON
+cmake --build build -j2
+ctest --test-dir build --output-on-failure
+```
 
 ### Transmisión
 
@@ -561,7 +580,7 @@ Icom7300Mk2Control/
 ├── morsetrainer.h
 ├── MorseTrainerWindow.qml
 ├── install-linux-user.sh
-├── es.ramonlorenzo.Icom7300Mk2Control.desktop
+├── org.icom.Icom7300Mk2Control.desktop
 ├── icons/
 │   ├── icom7300mk2_control.svg
 │   ├── icom7300mk2_control_32.png

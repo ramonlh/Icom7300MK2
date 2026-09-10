@@ -8,6 +8,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QVector>
+#include <functional>
 
 class RadioController final : public QObject
 {
@@ -609,7 +610,10 @@ public:
     Q_INVOKABLE void setSpectrumScopeVbwWide(bool wide);
 
     Q_INVOKABLE void setFrequency(const QString &text);
-    void setExternalFrequency(qulonglong frequencyHz);
+    Q_INVOKABLE void setExternalFrequency(qulonglong frequencyHz);
+    using LanReceiverWriter = std::function<bool(const QByteArray &, const QString &)>;
+    void setLanReceiverWriter(LanReceiverWriter writer);
+    void receiveLanReceiverFrame(const QByteArray &frame);
     Q_INVOKABLE void adjustFrequency(int deltaHz);
 
     Q_INVOKABLE void setVfoFrequency(int vfoNumber,
@@ -626,6 +630,7 @@ public:
 
     Q_INVOKABLE void selectVfoA();
     Q_INVOKABLE void selectVfoB();
+    Q_INVOKABLE void setSelectedVfoForLan(int vfoNumber);
     Q_INVOKABLE void equalizeVfos();
     Q_INVOKABLE void exchangeVfos();
     Q_INVOKABLE void setSplitEnabled(bool enabled);
@@ -1369,6 +1374,7 @@ private:
 
     // En este equipo el uso normal parte de VFO A. La selección queda
     // corregida automáticamente cuando la radio o la aplicación emiten 07 00/01.
+    LanReceiverWriter m_lanReceiverWriter;
     int m_selectedVfo = 0;
     VfoState m_vfoStates[2];
 

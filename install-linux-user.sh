@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ID="es.ramonlorenzo.Icom7300Mk2Control"
+APP_ID="org.icom.Icom7300Mk2Control"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXECUTABLE_SOURCE="${SOURCE_DIR}/build/Icom7300Mk2Control"
+BIN_DIR="${HOME}/.local/bin"
 APPLICATIONS_DIR="${HOME}/.local/share/applications"
 ICONS_BASE="${HOME}/.local/share/icons/hicolor"
 
-mkdir -p "${APPLICATIONS_DIR}"
+if [[ ! -x "${EXECUTABLE_SOURCE}" ]]; then
+    echo "No se encuentra el ejecutable compilado: ${EXECUTABLE_SOURCE}" >&2
+    echo "Compílalo primero con: cmake --build build" >&2
+    exit 1
+fi
+
+mkdir -p "${BIN_DIR}" "${APPLICATIONS_DIR}"
+install -m 0755 \
+    "${EXECUTABLE_SOURCE}" \
+    "${BIN_DIR}/Icom7300Mk2Control"
 install -m 0644 \
     "${SOURCE_DIR}/${APP_ID}.desktop" \
     "${APPLICATIONS_DIR}/${APP_ID}.desktop"
@@ -31,7 +42,8 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 fi
 
 echo
-echo "Icono y lanzador instalados para el usuario actual."
+echo "Programa, icono y lanzador instalados para el usuario actual."
+echo "Ejecutable: ${BIN_DIR}/Icom7300Mk2Control"
 echo "Cierra la aplicación completamente y vuelve a abrirla."
 echo "En algunos paneles puede ser necesario quitar el acceso anclado"
 echo "anterior y volver a anclar la aplicación."

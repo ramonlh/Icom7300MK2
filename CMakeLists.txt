@@ -31,6 +31,17 @@ qt_add_executable(Icom7300Mk2Control
     remoteserver.h
 )
 
+# Refresh the timestamp on every build, including incremental builds.
+add_custom_target(build_timestamp
+    COMMAND ${CMAKE_COMMAND}
+        -DOUTPUT_FILE=${CMAKE_CURRENT_BINARY_DIR}/build_timestamp.h
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-timestamp.cmake
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/build_timestamp.h
+    VERBATIM
+)
+add_dependencies(Icom7300Mk2Control build_timestamp)
+target_include_directories(Icom7300Mk2Control PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
 qt_add_resources(Icom7300Mk2Control "app_resources"
     PREFIX "/"
     FILES
@@ -59,6 +70,16 @@ set_target_properties(Icom7300Mk2Control PROPERTIES
     MACOSX_BUNDLE TRUE
 )
 
+option(ICOM_BUILD_TESTS "Build isolated controller tests" OFF)
+if(ICOM_BUILD_TESTS)
+    enable_testing()
+    add_executable(lan_receiver_test
+        tests/lan_receiver_test.cpp radiocontroller.cpp radiocontroller.h)
+    target_include_directories(lan_receiver_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(lan_receiver_test PRIVATE Qt6::Quick Qt6::SerialPort)
+    add_test(NAME lan_receiver COMMAND lan_receiver_test)
+endif()
+
 
 # Instalación opcional para Linux.
 # El nombre del .desktop debe coincidir con setDesktopFileName().
@@ -68,7 +89,7 @@ if(UNIX AND NOT APPLE)
     )
 
     install(FILES
-        es.ramonlorenzo.Icom7300Mk2Control.desktop
+        org.icom.Icom7300Mk2Control.desktop
         DESTINATION share/applications
     )
 
@@ -78,7 +99,7 @@ if(UNIX AND NOT APPLE)
             DESTINATION
                 share/icons/hicolor/${icon_size}x${icon_size}/apps
             RENAME
-                es.ramonlorenzo.Icom7300Mk2Control.png
+                org.icom.Icom7300Mk2Control.png
         )
     endforeach()
 endif()

@@ -54,6 +54,7 @@ class ApplicationLauncher final : public QObject
     Q_PROPERTY(QString lanUser READ lanUser WRITE setLanUser NOTIFY lanSettingsChanged)
     Q_PROPERTY(QString lanPassword READ lanPassword WRITE setLanPassword NOTIFY lanSettingsChanged)
     Q_PROPERTY(bool lanConnectionEnabled READ lanConnectionEnabled WRITE setLanConnectionEnabled NOTIFY lanSettingsChanged)
+    Q_PROPERTY(QString bandMemoriesJson READ bandMemoriesJson WRITE setBandMemoriesJson NOTIFY bandMemoriesChanged)
     Q_PROPERTY(bool lanConnected READ lanConnected NOTIFY lanConnectionChanged)
     Q_PROPERTY(bool lanDataEnabled READ lanDataEnabled NOTIFY lanDataEnabledChanged)
     Q_PROPERTY(QString lanMode READ lanMode NOTIFY lanModeChanged)
@@ -121,13 +122,25 @@ public:
     bool lanDataEnabled() const;
     QString lanMode() const;
     void setLanConnectionEnabled(bool value);
+    QString bandMemoriesJson() const;
+    void setBandMemoriesJson(const QString &value);
     Q_INVOKABLE void testLanConnection();
     Q_INVOKABLE void disconnectLanConnection();
     Q_INVOKABLE void testLanMode();
     Q_INVOKABLE void testLanModeName(const QString &mode);
-    Q_INVOKABLE void setLanFrequency(qulonglong frequencyHz);
+    Q_INVOKABLE bool setLanFrequency(qulonglong frequencyHz);
     Q_INVOKABLE void setLanDataEnabled(bool enabled, const QString &mode = QStringLiteral("USB"));
+    Q_INVOKABLE void exchangeLanVfos();
+    Q_INVOKABLE void equalizeLanVfos();
+    Q_INVOKABLE void setLanFilter(int filterNumber);
+    Q_INVOKABLE void selectLanVfo(int vfoNumber);
+    Q_INVOKABLE void setLanSplitEnabled(bool enabled);
+    Q_INVOKABLE void setLanRitEnabled(bool enabled);
+    Q_INVOKABLE void setLanDeltaTxEnabled(bool enabled);
     Q_INVOKABLE void shutdownLanConnection();
+    bool sendLanReceiverCommand(const QByteArray &payload, const QString &label);
+    void pollLanReceiverState();
+    void pollLanSmeter();
 
 signals:
     void statusChanged();
@@ -143,14 +156,20 @@ signals:
     void compactAlwaysOnTopChanged();
     void lanSettingsChanged();
     void lanFrequencyReceived(qulonglong frequencyHz);
+    void lanReceiverFrameReceived(const QByteArray &frame);
     void lanConnectionChanged();
     void lanDataEnabledChanged();
     void lanModeChanged();
+    void bandMemoriesChanged();
 
 private:
+    bool sendLanCivPayload(const QByteArray &payload, const QString &description,
+                           bool retransmit = true);
+    void refreshLanVfoState();
     void setStatus(const QString &status);
 
     QString m_status;
+    int m_lanReceiverQueryIndex = 0;
     QProcess *m_decodiumProcess = nullptr;
     QProcess *m_fldigiProcess = nullptr;
     QProcess *m_qsstvProcess = nullptr;

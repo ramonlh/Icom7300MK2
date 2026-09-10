@@ -16,6 +16,8 @@
 #include <QTime>
 #include <QDateTime>
 #include <QDebug>
+#include <QDir>
+#include <QStandardPaths>
 
 #include <algorithm>
 
@@ -84,10 +86,25 @@ bool resendRememberedLanCivPacket(QUdpSocket *owner, QUdpSocket *stream,
     stream->writeDatagram(resend, QHostAddress(host), port);
     return true;
 }
-const QString kDecodiumExecutable = QStringLiteral(
-    "/home/ramon/Aplicaciones/Decodium/"
-    "decodium4-ft2-1.0.490-linux-x86_64.AppImage"
-);
+QString decodiumExecutable()
+{
+    const QString fromPath = QStandardPaths::findExecutable(
+        QStringLiteral("decodium4-ft2"));
+    if (!fromPath.isEmpty())
+        return fromPath;
+
+    const QStringList directories{
+        QDir::homePath() + QStringLiteral("/Aplicaciones/Decodium"),
+        QDir::homePath() + QStringLiteral("/Applications/Decodium")};
+    for (const QString &directory : directories) {
+        const QFileInfoList matches = QDir(directory).entryInfoList(
+            {QStringLiteral("decodium*.AppImage")}, QDir::Files | QDir::Executable,
+            QDir::Name);
+        if (!matches.isEmpty())
+            return matches.constLast().absoluteFilePath();
+    }
+    return {};
+}
 const QString kFldigiExecutable = QStringLiteral("/usr/bin/fldigi");
 const QString kQsstvExecutable = QStringLiteral("/usr/bin/qsstv");
 const QString kJs8callExecutable = QStringLiteral("/usr/bin/js8call");
@@ -325,6 +342,22 @@ void ApplicationLauncher::setLanPassword(const QString &value)
     m_lanPassword = value; QSettings().setValue("lan/password", value); emit lanSettingsChanged();
 }
 bool ApplicationLauncher::lanConnectionEnabled() const { return m_lanConnectionEnabled; }
+QString ApplicationLauncher::bandMemoriesJson() const
+{
+    return QSettings().value(QStringLiteral("bands/memoriesJson"), QStringLiteral("{}"))
+        .toString();
+}
+
+void ApplicationLauncher::setBandMemoriesJson(const QString &value)
+{
+    if (value.isEmpty()) return;
+    QSettings settings;
+    if (settings.value(QStringLiteral("bands/memoriesJson"), QStringLiteral("{}")) == value)
+        return;
+    settings.setValue(QStringLiteral("bands/memoriesJson"), value);
+    settings.sync();
+    emit bandMemoriesChanged();
+}
 bool ApplicationLauncher::lanConnected() const { return m_lanConnected; }
 bool ApplicationLauncher::lanDataEnabled() const { return m_lanDataEnabled; }
 QString ApplicationLauncher::lanMode() const { return m_lanMode; }
@@ -555,8 +588,10 @@ void ApplicationLauncher::testLanConnection()
             QByteArray pass = lanPasscode(m_lanPassword);
             memcpy(login.data() + 64, user.constData(), size_t(user.size()));
             memcpy(login.data() + 80, pass.constData(), size_t(pass.size()));
-            // Match the client name used by the known-good WFView session.
-            QByteArray name = QByteArrayLiteral("ramon-HP-wfview");
+            // The login protocol reserves exactly 16 bytes for the client
+            // name.  Keep the generic identifier shorter so it cannot
+            // overwrite the following authentication fields.
+            QByteArray name = QByteArrayLiteral("icom7300mk2ctl");
             memcpy(login.data() + 96, name.constData(), size_t(name.size()));
             socket->writeDatagram(login, QHostAddress(host), 50001);
             socket->setProperty("lanProbeResponded", true);
@@ -702,8 +737,9 @@ void ApplicationLauncher::testLanConnection()
                         QByteArray ping(21, '\0');
                         qToLittleEndian<quint32>(21, reinterpret_cast<uchar *>(ping.data()));
                         qToLittleEndian<quint16>(7, reinterpret_cast<uchar *>(ping.data()+4));
-                        const quint16 seq = quint16(socket->property("lanCivPingSeq").toUInt());
-                        qToLittleEndian<quint16>(seq, reinterpret_cast<uchar *>(ping.data()+6));
+                    const quint16 seq = quint16(socket->property("lanCivPingSeq").toUInt());
+                    qToLittleEndian<quint16>(seq, reinterpret_cast<uchar *>(ping.data()+6));
+                    socket->setProperty("lanCivPingSeq", quint32(seq + 1));
                         qToLittleEndian<quint32>(socket->property("lanCivId").toUInt(), reinterpret_cast<uchar *>(ping.data()+8));
                         qToLittleEndian<quint32>(socket->property("lanCivRemoteId").toUInt(), reinterpret_cast<uchar *>(ping.data()+12));
                         // The ping packet has a one-byte reply field at 0x10;
@@ -1012,6 +1048,24 @@ void ApplicationLauncher::testLanConnection()
                                 setStatus(QStringLiteral("LAN: cabecera CI-V %1").arg(civ.left(80).toHex(' ')));
                             if (civ.size() >= 27) {
                                 const QByteArray frame = civ.mid(21);
+                                // A LAN packet can contain multiple CI-V frames.
+                                // Forward only complete radio replies, never command echoes.
+                                int receiverOffset = 0;
+                                while ((receiverOffset = frame.indexOf(QByteArray::fromHex("fefe"), receiverOffset)) >= 0) {
+                                    const int end = frame.indexOf(char(0xfd), receiverOffset + 2);
+                                    if (end < 0)
+                                        break;
+                                    const QByteArray reply = frame.mid(receiverOffset, end - receiverOffset + 1);
+                                    if (reply.size() >= 7 && quint8(reply.at(3)) == 0x94
+                                        && (quint8(reply.at(2)) == 0xe0 || quint8(reply.at(2)) == 0x00)
+                                        && (quint8(reply.at(4)) == 0x07 || quint8(reply.at(4)) == 0x0f
+                                            || quint8(reply.at(4)) == 0x11 || quint8(reply.at(4)) == 0x14
+                                            || quint8(reply.at(4)) == 0x15 || quint8(reply.at(4)) == 0x16
+                                            || quint8(reply.at(4)) == 0x21 || quint8(reply.at(4)) == 0x25
+                                            || quint8(reply.at(4)) == 0x26 || quint8(reply.at(4)) == 0x1A))
+                                        emit lanReceiverFrameReceived(reply);
+                                    receiverOffset = end + 1;
+                                }
                                 // DATA query response: FE FE 00 94 1A 06
                                 // <state> FD. Reflect the radio's real state
                                 // in the LAN-specific UI property.
@@ -1116,7 +1170,11 @@ void ApplicationLauncher::testLanConnection()
                 QByteArray encodedUser = lanPasscode(m_lanUser);
                 memcpy(conn.data()+0x60, encodedUser.constData(), size_t(encodedUser.size()));
                 conn[0x70] = 1; // RX enabled
-                conn[0x71] = 0; // TX disabled for this probe
+                // Keep the proven receive/CI-V session profile. Advertising
+                // TX without completing the corresponding transmit-audio
+                // stream prevents this radio from starting its CI-V data
+                // stream, even though authentication itself succeeds.
+                conn[0x71] = 0; // TX audio disabled
                 conn[0x72] = 4; // LPCM16
                 qToBigEndian<quint32>(48000, reinterpret_cast<uchar *>(conn.data()+0x74));
                 qToBigEndian<quint32>(48000, reinterpret_cast<uchar *>(conn.data()+0x78));
@@ -1137,6 +1195,7 @@ void ApplicationLauncher::testLanConnection()
                     qToLittleEndian<quint16>(7, reinterpret_cast<uchar *>(ping.data()+4));
                     const quint16 seq = quint16(socket->property("lanControlPingSeq").toUInt());
                     qToLittleEndian<quint16>(seq, reinterpret_cast<uchar *>(ping.data()+6));
+                    socket->setProperty("lanControlPingSeq", quint32(seq + 1));
                     qToLittleEndian<quint32>(id, reinterpret_cast<uchar *>(ping.data()+8));
                     qToLittleEndian<quint32>(socket->property("lanRemoteId").toUInt(), reinterpret_cast<uchar *>(ping.data()+12));
                     ping[16] = 1;
@@ -1291,12 +1350,227 @@ void ApplicationLauncher::testLanMode()
     testLanModeName(QStringLiteral("USB"));
 }
 
+bool ApplicationLauncher::sendLanCivPayload(const QByteArray &payload,
+                                             const QString &description,
+                                             bool retransmit)
+{
+    QUdpSocket *civSocket = nullptr;
+    QUdpSocket *owner = nullptr;
+    for (QUdpSocket *s : findChildren<QUdpSocket *>()) {
+        if (s->property("lanIsCiv").toBool() && s->state() == QAbstractSocket::BoundState) {
+            civSocket = s;
+            owner = qobject_cast<QUdpSocket *>(s->parent());
+            break;
+        }
+    }
+    if (!civSocket || !owner) {
+        setStatus(QStringLiteral("LAN: no hay canal CI-V activo para %1")
+                      .arg(description));
+        return false;
+    }
+    const quint32 remoteId = owner->property("lanCivRemoteId").toUInt()
+                           ?: owner->property("lanRemoteId").toUInt();
+    if (!remoteId)
+        return false;
+
+    QByteArray civ = QByteArray::fromHex("FE FE 94 E0");
+    civ.append(payload);
+    civ.append(char(0xfd));
+    QByteArray packet(21, '\0');
+    qToLittleEndian<quint32>(21 + civ.size(),
+                             reinterpret_cast<uchar *>(packet.data()));
+    const quint16 seq = quint16(owner->property("lanCivTransportSeq").toUInt());
+    qToLittleEndian<quint16>(seq,
+                             reinterpret_cast<uchar *>(packet.data() + 6));
+    owner->setProperty("lanCivTransportSeq", quint32(seq + 1));
+    qToLittleEndian<quint32>(owner->property("lanCivId").toUInt(),
+                             reinterpret_cast<uchar *>(packet.data() + 8));
+    qToLittleEndian<quint32>(remoteId,
+                             reinterpret_cast<uchar *>(packet.data() + 12));
+    packet[16] = char(0xc1);
+    qToLittleEndian<quint16>(civ.size(),
+                             reinterpret_cast<uchar *>(packet.data() + 17));
+    const quint16 civSeq = quint16(owner->property("lanCivSeq").toUInt());
+    qToBigEndian<quint16>(civSeq,
+                          reinterpret_cast<uchar *>(packet.data() + 19));
+    owner->setProperty("lanCivSeq", quint32(civSeq + 1));
+    packet.append(civ);
+
+    const QHostAddress destination(m_lanHost);
+    const quint16 port = owner->property("lanRemoteCivPort").toUInt() ?: 50002;
+    rememberLanCivPacket(owner, packet);
+    civSocket->writeDatagram(packet, destination, port);
+    if (retransmit) {
+        QTimer::singleShot(120, civSocket, [civSocket, packet, destination, port]() {
+            if (civSocket->state() == QAbstractSocket::BoundState)
+                civSocket->writeDatagram(packet, destination, port);
+        });
+        QTimer::singleShot(320, civSocket, [civSocket, packet, destination, port]() {
+            if (civSocket->state() == QAbstractSocket::BoundState)
+                civSocket->writeDatagram(packet, destination, port);
+        });
+    }
+    setStatus(QStringLiteral("LAN: %1 enviado por CI-V: %2")
+                  .arg(description, civ.toHex(' ')));
+    return true;
+}
+
+void ApplicationLauncher::exchangeLanVfos()
+{
+    if (sendLanCivPayload(QByteArray::fromHex("07B0"),
+                          QStringLiteral("intercambio A/B")))
+        refreshLanVfoState();
+}
+
+void ApplicationLauncher::selectLanVfo(int vfoNumber)
+{
+    if (vfoNumber < 0 || vfoNumber > 1) return;
+    if (sendLanCivPayload(QByteArray::fromHex(vfoNumber == 0 ? "0700" : "0701"),
+                          vfoNumber == 0 ? QStringLiteral("VFO A") : QStringLiteral("VFO B")))
+        refreshLanVfoState();
+}
+
+void ApplicationLauncher::setLanSplitEnabled(bool enabled)
+{
+    sendLanCivPayload(QByteArray::fromHex(enabled ? "0f01" : "0f00"),
+                      enabled ? QStringLiteral("SPLIT activado") : QStringLiteral("SPLIT desactivado"));
+    QTimer::singleShot(400, this, [this]() {
+        if (m_lanConnected) sendLanCivPayload(QByteArray::fromHex("0f"), QStringLiteral("consulta SPLIT"));
+    });
+}
+
+void ApplicationLauncher::setLanRitEnabled(bool enabled)
+{
+    sendLanCivPayload(QByteArray::fromHex(enabled ? "210101" : "210100"),
+                      enabled ? QStringLiteral("RIT activado") : QStringLiteral("RIT desactivado"));
+    QTimer::singleShot(400, this, [this]() {
+        if (m_lanConnected) sendLanCivPayload(QByteArray::fromHex("2101"), QStringLiteral("consulta RIT"));
+    });
+}
+
+void ApplicationLauncher::setLanDeltaTxEnabled(bool enabled)
+{
+    sendLanCivPayload(QByteArray::fromHex(enabled ? "210201" : "210200"),
+                      enabled ? QStringLiteral("ΔTX activado") : QStringLiteral("ΔTX desactivado"));
+    QTimer::singleShot(400, this, [this]() {
+        if (m_lanConnected) sendLanCivPayload(QByteArray::fromHex("2102"), QStringLiteral("consulta ΔTX"));
+    });
+}
+
+bool ApplicationLauncher::sendLanReceiverCommand(const QByteArray &payload,
+                                                 const QString &label)
+{
+    if (!m_lanConnected)
+        return false;
+
+    // A memory read already contains its channel (1A 00 nn). Do not add the
+    // generic control retry/duplicate query here: doing so triples traffic
+    // during the M01-M99 startup scan and can starve the LAN keepalive.
+    const bool memoryRead = payload.size() >= 3
+                            && quint8(payload.at(0)) == 0x1A
+                            && quint8(payload.at(1)) == 0x00;
+    if (!sendLanCivPayload(payload, label, !memoryRead))
+        return false;
+    if (memoryRead)
+        return true;
+
+    const QByteArray query = payload.left(quint8(payload.at(0)) == 0x11 ? 1 : 2);
+    QTimer::singleShot(450, this, [this, query]() {
+        if (m_lanConnected)
+            sendLanCivPayload(query, QStringLiteral("consulta de recepción"));
+    });
+    return true;
+}
+
+void ApplicationLauncher::pollLanReceiverState()
+{
+    if (!m_lanConnected)
+        return;
+    // Rotate through existing reception controls to track front-panel changes.
+    static const QList<QByteArray> queries{
+        QByteArray::fromHex("1602"), QByteArray::fromHex("11"),
+        QByteArray::fromHex("1612"), QByteArray::fromHex("1622"),
+        QByteArray::fromHex("1640"), QByteArray::fromHex("1641"),
+        QByteArray::fromHex("1648"), QByteArray::fromHex("1665"),
+        QByteArray::fromHex("1401"), QByteArray::fromHex("1402"),
+        QByteArray::fromHex("1403"), QByteArray::fromHex("1412"),
+        QByteArray::fromHex("1406"), QByteArray::fromHex("140d"),
+        QByteArray::fromHex("2501"), QByteArray::fromHex("2600"),
+        QByteArray::fromHex("2601")};
+    sendLanCivPayload(queries.at(m_lanReceiverQueryIndex),
+                      QStringLiteral("consulta de recepción"));
+    m_lanReceiverQueryIndex = (m_lanReceiverQueryIndex + 1) % queries.size();
+}
+
+void ApplicationLauncher::pollLanSmeter()
+{
+    if (m_lanConnected)
+        sendLanCivPayload(QByteArray::fromHex("1502"),
+                          QStringLiteral("consulta S-Meter"), false);
+}
+
+void ApplicationLauncher::equalizeLanVfos()
+{
+    if (sendLanCivPayload(QByteArray::fromHex("07A0"),
+                          QStringLiteral("copia A=B")))
+        refreshLanVfoState();
+}
+
+void ApplicationLauncher::refreshLanVfoState()
+{
+    if (!m_lanConnected)
+        return;
+
+    // The normal polling loop visits each item only every several seconds.
+    // After a VFO operation, query both frequencies and both mode/DATA/filter
+    // records immediately, with a small gap so the LAN CI-V bridge can reply.
+    const QList<QByteArray> queries{
+        QByteArray::fromHex("2500"), QByteArray::fromHex("2501"),
+        QByteArray::fromHex("2600"), QByteArray::fromHex("2601")};
+    for (qsizetype i = 0; i < queries.size(); ++i) {
+        const QByteArray query = queries.at(i);
+        QTimer::singleShot(int(i * 100), this, [this, query]() {
+            if (m_lanConnected)
+                sendLanCivPayload(query, QStringLiteral("actualización inmediata VFO"), false);
+        });
+    }
+}
+
+void ApplicationLauncher::setLanFilter(int filterNumber)
+{
+    if (filterNumber < 1 || filterNumber > 3) {
+        setStatus(QStringLiteral("LAN: filtro no válido"));
+        return;
+    }
+    const QHash<QString, quint8> modeCodes{
+        {QStringLiteral("LSB"), 0x00}, {QStringLiteral("USB"), 0x01},
+        {QStringLiteral("AM"), 0x02}, {QStringLiteral("CW"), 0x03},
+        {QStringLiteral("RTTY"), 0x04}, {QStringLiteral("FM"), 0x05},
+        {QStringLiteral("CW-R"), 0x07}, {QStringLiteral("RTTY-R"), 0x08}};
+    QByteArray payload;
+    // Unlike a mode-only change (06), changing just the filter must preserve
+    // the current DATA bit.  The extended selected-VFO command carries all
+    // three values: mode, DATA and filter.
+    payload.append(char(0x26));
+    payload.append(char(0x00));
+    payload.append(char(modeCodes.value(m_lanMode, 0x01)));
+    payload.append(char(m_lanDataEnabled ? 0x01 : 0x00));
+    payload.append(char(filterNumber));
+    if (sendLanCivPayload(payload, QStringLiteral("FIL%1").arg(filterNumber))) {
+        QTimer::singleShot(450, this, [this]() {
+            if (m_lanConnected)
+                sendLanCivPayload(QByteArray::fromHex("2600"),
+                                  QStringLiteral("consulta del filtro activo"));
+        });
+    }
+}
+
 void ApplicationLauncher::testLanModeName(const QString &mode)
 {
     QUdpSocket *civSocket = nullptr;
     QUdpSocket *owner = nullptr;
     for (QUdpSocket *s : findChildren<QUdpSocket *>()) {
-        if (s->property("lanIsCiv").toBool() && s->isOpen()) {
+        if (s->property("lanIsCiv").toBool() && s->state() == QAbstractSocket::BoundState) {
             civSocket = s;
             owner = qobject_cast<QUdpSocket *>(s->parent());
             break;
@@ -1317,10 +1591,11 @@ void ApplicationLauncher::testLanModeName(const QString &mode)
                            ?: owner->property("lanRemoteId").toUInt();
     const QHash<QString, quint8> modeCodes{{QStringLiteral("LSB"),0x00},{QStringLiteral("USB"),0x01},{QStringLiteral("AM"),0x02},{QStringLiteral("CW"),0x03},{QStringLiteral("RTTY"),0x04},{QStringLiteral("FM"),0x05},{QStringLiteral("CW-R"),0x07},{QStringLiteral("RTTY-R"),0x08}};
     const quint8 code = modeCodes.value(mode, 0x01);
-    // Command 0x06 changes the selected VFO's operating mode and filter.
-    // Command 0x26 is reserved for the extended main/sub VFO state form.
-    QByteArray civ = QByteArray::fromHex("FE FE 94 E0 06 01 01 FD");
-    civ[5] = char(code);
+    // Send the selected-VFO extended mode command with the current DATA
+    // state so selecting a mode cannot implicitly turn DATA on or off.
+    QByteArray civ = QByteArray::fromHex("FE FE 94 E0 26 00 01 00 01 FD");
+    civ[6] = char(code);
+    civ[7] = char(m_lanDataEnabled ? 0x01 : 0x00);
     QByteArray packet(21, '\0');
     qToLittleEndian<quint32>(21 + civ.size(), reinterpret_cast<uchar *>(packet.data()));
     const quint16 seq = quint16(owner->property("lanCivTransportSeq").toUInt());
@@ -1341,10 +1616,10 @@ void ApplicationLauncher::testLanModeName(const QString &mode)
     // (same transport and CI-V sequence numbers), as required by the Icom
     // packet-0 protocol, instead of creating a new command sequence.
     QTimer::singleShot(120, civSocket, [civSocket, packet, destination, destinationPort]() {
-        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+        if (civSocket->state() == QAbstractSocket::BoundState) civSocket->writeDatagram(packet, destination, destinationPort);
     });
     QTimer::singleShot(320, civSocket, [civSocket, packet, destination, destinationPort]() {
-        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+        if (civSocket->state() == QAbstractSocket::BoundState) civSocket->writeDatagram(packet, destination, destinationPort);
     });
     // Keep the LAN UI coherent with the accepted user command.  CI-V mode
     // writes are not followed by a mode-status frame on this radio; DATA uses
@@ -1356,12 +1631,18 @@ void ApplicationLauncher::testLanModeName(const QString &mode)
     setStatus(QStringLiteral("LAN: comando de modo %1 enviado por CI-V con reintento: %2").arg(mode, civ.toHex(' ')));
 }
 
-void ApplicationLauncher::setLanFrequency(qulonglong frequencyHz)
+bool ApplicationLauncher::setLanFrequency(qulonglong frequencyHz)
 {
+    // A bound UDP socket can report isOpen() == false before any QIODevice
+    // read/write. Its BoundState is what makes datagram operations usable.
+    if (frequencyHz < 30000 || frequencyHz > 74800000) {
+        setStatus(QStringLiteral("LAN: frecuencia fuera de margen"));
+        return false;
+    }
     QUdpSocket *civSocket = nullptr;
     QUdpSocket *owner = nullptr;
     for (QUdpSocket *s : findChildren<QUdpSocket *>()) {
-        if (s->property("lanIsCiv").toBool() && s->isOpen()) {
+        if (s->property("lanIsCiv").toBool() && s->state() == QAbstractSocket::BoundState) {
             civSocket = s;
             owner = qobject_cast<QUdpSocket *>(s->parent());
             break;
@@ -1369,11 +1650,11 @@ void ApplicationLauncher::setLanFrequency(qulonglong frequencyHz)
     }
     if (!civSocket || !owner) {
         setStatus(QStringLiteral("LAN: no hay canal CI-V activo para cambiar frecuencia"));
-        return;
+        return false;
     }
     const quint32 remoteId = owner->property("lanCivRemoteId").toUInt()
                            ?: owner->property("lanRemoteId").toUInt();
-    if (!remoteId) return;
+    if (!remoteId) return false;
     QByteArray civ = QByteArray::fromHex("FE FE 94 E0 25 00");
     quint64 value = frequencyHz;
     for (int i = 0; i < 5; ++i) {
@@ -1400,12 +1681,13 @@ void ApplicationLauncher::setLanFrequency(qulonglong frequencyHz)
     rememberLanCivPacket(owner, packet);
     civSocket->writeDatagram(packet, destination, destinationPort);
     QTimer::singleShot(120, civSocket, [civSocket, packet, destination, destinationPort]() {
-        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+        if (civSocket->state() == QAbstractSocket::BoundState) civSocket->writeDatagram(packet, destination, destinationPort);
     });
     QTimer::singleShot(320, civSocket, [civSocket, packet, destination, destinationPort]() {
-        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+        if (civSocket->state() == QAbstractSocket::BoundState) civSocket->writeDatagram(packet, destination, destinationPort);
     });
     setStatus(QStringLiteral("LAN: frecuencia %1 Hz enviada por CI-V").arg(frequencyHz));
+    return true;
 }
 
 void ApplicationLauncher::setLanDataEnabled(bool enabled, const QString &mode)
@@ -1440,10 +1722,10 @@ void ApplicationLauncher::setLanDataEnabled(bool enabled, const QString &mode)
     rememberLanCivPacket(owner, packet);
     civSocket->writeDatagram(packet, destination, destinationPort);
     QTimer::singleShot(120, civSocket, [civSocket, packet, destination, destinationPort]() {
-        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+        if (civSocket->state() == QAbstractSocket::BoundState) civSocket->writeDatagram(packet, destination, destinationPort);
     });
     QTimer::singleShot(320, civSocket, [civSocket, packet, destination, destinationPort]() {
-        if (civSocket->isOpen()) civSocket->writeDatagram(packet, destination, destinationPort);
+        if (civSocket->state() == QAbstractSocket::BoundState) civSocket->writeDatagram(packet, destination, destinationPort);
     });
     if (m_lanDataEnabled != enabled) {
         m_lanDataEnabled = enabled;
@@ -1555,7 +1837,7 @@ bool ApplicationLauncher::launchDecodium()
         return true;
     }
 
-    const QFileInfo executable(kDecodiumExecutable);
+    const QFileInfo executable(decodiumExecutable());
     if (!executable.exists() || !executable.isFile()) {
         setStatus(QStringLiteral("No se encontró DECODIUM 4"));
         return false;

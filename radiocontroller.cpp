@@ -2626,6 +2626,25 @@ void RadioController::adjustFrequency(int deltaHz)
     adjustVfoFrequency(m_selectedVfo, deltaHz);
 }
 
+void RadioController::setLanReceiverWriter(LanReceiverWriter writer)
+{
+    m_lanReceiverWriter = std::move(writer);
+}
+
+void RadioController::receiveLanReceiverFrame(const QByteArray &frame)
+{
+    if (!m_lanReceiverWriter || frame.size() < 7)
+        return;
+    // Only reception-state replies enter this path; ACKs and USB write
+    // completion remain owned by their respective transports.
+    const quint8 command = quint8(frame.at(4));
+    if (command == 0x07 || command == 0x0f || command == 0x11
+        || command == 0x14 || command == 0x15 || command == 0x16
+        || command == 0x21 || command == 0x25 || command == 0x26
+        || command == 0x1A)
+        processFrame(frame);
+}
+
 void RadioController::setVfoFrequency(int vfoNumber,
                                       const QString &text)
 {
@@ -2708,7 +2727,8 @@ void RadioController::setOperatingMode(const QString &requestedMode)
         return;
     }
 
-    const bool newData = modeSupportsData(newMode) ? m_dataMode : false;
+    // Selecting a mode must not implicitly toggle DATA.
+    const bool newData = m_dataMode;
     const quint8 filter = (m_filterCode >= 1 && m_filterCode <= 3)
                               ? m_filterCode : 1;
 
@@ -2805,6 +2825,13 @@ void RadioController::selectVfoB()
                         QByteArray::fromHex("0701"),
                         QStringLiteral("VFO B"),
                         QueryKind::Frequency, 1);
+}
+
+void RadioController::setSelectedVfoForLan(int vfoNumber)
+{
+    // LAN selection is sent by ApplicationLauncher; keep the UI state in
+    // sync without queueing a second command on the unavailable serial port.
+    updateVfo(vfoNumber);
 }
 
 void RadioController::equalizeVfos()
@@ -3671,7 +3698,7 @@ void RadioController::sendNextCwRefreshQuery()
         return;
     }
 
-    if (!m_serial.isOpen()) {
+    if (!m_serial.isOpen() && !m_lanReceiverWriter) {
         m_cwRefreshActive = false;
         m_cwRefreshQueries.clear();
         m_keyerReadQueue.clear();
@@ -3999,12 +4026,12 @@ void RadioController::readMemoryRange(int firstChannel, int count)
     firstChannel = std::clamp(firstChannel, 1, 99);
     count = std::clamp(count, 1, 99 - firstChannel + 1);
 
-    if (!m_serial.isOpen()) {
+    if (!m_serial.isOpen() && !m_lanReceiverWriter) {
         setActionStatus(QStringLiteral("La radio no está conectada"));
         return;
     }
 
-    if (!m_txStateKnown || m_transmitting) {
+    if ((!m_txStateKnown && !m_lanReceiverWriter) || m_transmitting) {
         deferMemoryRead(
             firstChannel,
             count,
@@ -4070,7 +4097,7 @@ void RadioController::refreshMemoryScanSettings(int firstChannel)
 {
     firstChannel = std::clamp(firstChannel, 1, 99);
 
-    if (!m_serial.isOpen()) {
+    if (!m_serial.isOpen() && !m_lanReceiverWriter) {
         setActionStatus(
             QStringLiteral("Conecte la radio para leer MEM / SCAN")
         );
@@ -6415,7 +6442,22 @@ void RadioController::sendQuery(QueryKind query)
         return;
     }
 
-    if (!sendCivPayload(payload)) {
+    bool sent = false;
+    if (m_lanReceiverWriter) {
+        sent = m_lanReceiverWriter(payload, QStringLiteral("consulta de memoria"));
+    } else {
+        sent = sendCivPayload(payload);
+    }
+    if (!sent) {
+        if (query == QueryKind::MemoryContent && m_lanReceiverWriter
+            && m_memoryReadBatchActive
+            && m_pendingMemoryReadChannel >= 1
+            && m_pendingMemoryReadChannel <= 99) {
+            m_memoryReadQueue.prepend(m_pendingMemoryReadChannel);
+            QTimer::singleShot(800, this,
+                               &RadioController::sendNextCwRefreshQuery);
+            return;
+        }
         if (m_cwRefreshActive) {
             if (query == QueryKind::MemoryContent
                 && m_memoryReadBatchActive) {
@@ -6523,6 +6565,35 @@ void RadioController::queueProtectedWrite(WriteKind kind,
                                           QueryKind refreshQuery,
                                           int desiredValue)
 {
+    if (m_lanReceiverWriter) {
+        switch (kind) {
+        case WriteKind::Preamp:
+        case WriteKind::Attenuator:
+        case WriteKind::Agc:
+        case WriteKind::NoiseBlanker:
+        case WriteKind::NoiseBlankerLevel:
+        case WriteKind::NoiseReduction:
+        case WriteKind::NoiseReductionLevel:
+        case WriteKind::AutoNotch:
+        case WriteKind::ManualNotch:
+        case WriteKind::ManualNotchPosition:
+        case WriteKind::IpPlus:
+        case WriteKind::FilterShape:
+        case WriteKind::AfGain:
+        case WriteKind::RfGain:
+        case WriteKind::Squelch:
+            if (m_transmitting) {
+                setActionStatus(QStringLiteral("Cambio bloqueado: la radio está transmitiendo"));
+                return;
+            }
+            setActionStatus(m_lanReceiverWriter(payload, label)
+                ? QStringLiteral("LAN: %1 · esperando lectura de la radio").arg(label)
+                : QStringLiteral("LAN: no se pudo enviar %1").arg(label));
+            return;
+        default:
+            break;
+        }
+    }
     if (!m_serial.isOpen()) {
         setActionStatus(QStringLiteral("La radio no está conectada"));
         return;

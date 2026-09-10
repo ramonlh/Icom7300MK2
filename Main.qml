@@ -14,7 +14,7 @@ ApplicationWindow {
     maximumHeight: 880
 
     visible: true
-    title: "Control IC-7300MK2 · Versión 1.2.12"
+    title: "Control IC-7300MK2 · Versión 1.2.12 · Compilado " + buildTimestamp
     color: "#454545"
 
     property bool diagnosticsVisible: false
@@ -113,6 +113,8 @@ ApplicationWindow {
             remoteServerWindow.close()
         remoteServerVisible = false
         memoryQuickPanelVisible = false
+        if (memoryQuickWindow.visible)
+            memoryQuickWindow.close()
         scannerVisible = false
         scopeVisible = false
         morseTrainerVisible = false
@@ -467,6 +469,20 @@ ApplicationWindow {
     Connections {
         target: applicationLauncher
 
+        function onLanConnectionChanged() {
+            if (applicationLauncher.lanConnected
+                    && !radioController.busy
+                    && memoryQuickLoadedCount < 99) {
+                // El escritor CI-V LAN se instala al recibir esta señal.
+                Qt.callLater(function() {
+                    if (applicationLauncher.lanConnected
+                            && !radioController.busy
+                            && memoryQuickLoadedCount < 99)
+                        radioController.readMemoryRange(1, 99)
+                })
+            }
+        }
+
         function onFldigiRunningChanged() {
             if (!applicationLauncher.fldigiRunning)
                 externalDigitalMode = ""
@@ -526,9 +542,13 @@ ApplicationWindow {
           defaultHz: 70200000, label: "4 m" }
     ]
 
-    property var bandMemories: ({})
+    property var bandMemories: JSON.parse(applicationLauncher.bandMemoriesJson)
     property string currentBandName:
         bandNameForFrequency(activeVfoFrequencyHz())
+
+    onBandMemoriesChanged: {
+        applicationLauncher.bandMemoriesJson = JSON.stringify(bandMemories)
+    }
 
     ListModel {
         id: memoryQuickModel
@@ -684,7 +704,7 @@ ApplicationWindow {
                 memoryQuickWindow.requestActivate()
             })
 
-            if (radioController.connected
+            if ((radioController.connected || applicationLauncher.lanConnected)
                     && !radioController.busy
                     && memoryQuickLoadedCount < 99) {
                 radioController.readMemoryRange(1, 99)
@@ -783,10 +803,19 @@ ApplicationWindow {
             ? Number(bandMemories[key])
             : Number(band.defaultHz)
 
-        radioController.setVfoFrequency(
-            vfoNumber,
-            String(targetFrequency)
-        )
+        if (applicationLauncher.lanConnected) {
+            // The LAN CI-V frequency write addresses the selected VFO.
+            // Keep the same band-memory behavior as the USB path.
+            if (vfoNumber !== radioController.selectedVfo)
+                return
+            if (applicationLauncher.setLanFrequency(targetFrequency))
+                radioController.setExternalFrequency(targetFrequency)
+        } else {
+            radioController.setVfoFrequency(
+                vfoNumber,
+                String(targetFrequency)
+            )
+        }
     }
 
     function formatBandFrequency(frequencyHz) {
@@ -1136,12 +1165,31 @@ ApplicationWindow {
         if (!controlsEnabled() || stepCount === 0)
             return
 
-        radioController.adjustVfoFrequency(
+        if (adjustTuningFrequency(
             radioController.selectedVfo,
             stepCount * selectedStep()
-        )
+        ))
+            tuningAngle += stepCount * 8
+    }
 
-        tuningAngle += stepCount * 8
+    function adjustTuningFrequency(vfoNumber, deltaHz) {
+        if (applicationLauncher.lanConnected) {
+            // The LAN frequency command addresses the selected VFO only.
+            if (vfoNumber !== radioController.selectedVfo)
+                return false
+            const current = Number(radioController.frequencyHz)
+            if (current <= 0)
+                return false
+            const target = current + deltaHz
+            if (!applicationLauncher.setLanFrequency(target))
+                return false
+            // Accumulate fast wheel steps immediately. Incoming radio
+            // frequency reports subsequently reconcile the displayed value.
+            radioController.setExternalFrequency(target)
+            return true
+        }
+        radioController.adjustVfoFrequency(vfoNumber, deltaHz)
+        return true
     }
 
     function controlHelp(label) {
@@ -3668,8 +3716,8 @@ ApplicationWindow {
         property color displayColor:
             active
             ? (vfoNumber === 0
-               ? "#79e6ff"
-               : "#8cf0ad")
+               ? "#36c8ff"
+               : "#ffb347")
             : (radioController.splitEnabled
                ? "#ffc276"
                : "#9bd7aa")
@@ -3677,8 +3725,8 @@ ApplicationWindow {
         property color outlineColor:
             active
             ? (vfoNumber === 0
-               ? "#123b4c"
-               : "#163f27")
+               ? "#0b3c56"
+               : "#5a2e08")
             : (radioController.splitEnabled
                ? "#4d2d12"
                : "#17331f")
@@ -3827,15 +3875,12 @@ ApplicationWindow {
                     frequencyDigits
                     .digitStepAt(wheel.x)
 
-                radioController
-                .adjustVfoFrequency(
+                if (adjustTuningFrequency(
                     frequencyDigits
                     .vfoNumber,
                     direction * step
-                )
-
-                tuningAngle +=
-                    direction * 8
+                ))
+                    tuningAngle += direction * 8
                 wheel.accepted = true
             }
         }
@@ -6269,7 +6314,10 @@ ApplicationWindow {
             anchors.fill: parent
             anchors.margins: 2
             color: "#071014"
-            border.color: "#347e98"
+            border.color:
+                radioController.selectedVfo === 0
+                ? "#347e98"
+                : "#9a6630"
             radius: 4
 
             RowLayout {
@@ -6280,7 +6328,10 @@ ApplicationWindow {
                 Text {
                     Layout.fillWidth: true
                     text: radioController.frequencyMhzText
-                    color: "#77dcff"
+                    color:
+                        radioController.selectedVfo === 0
+                        ? "#36c8ff"
+                        : "#ffb347"
                     font.family: "DejaVu Sans Mono"
                     font.pixelSize: 25
                     font.bold: true
@@ -6323,7 +6374,7 @@ ApplicationWindow {
                | (applicationLauncher.compactAlwaysOnTop
                   ? Qt.WindowStaysOnTopHint : 0)
         color: "#292d30"
-        title: "IC-7300MK2 · Control compacto"
+        title: "IC-7300MK2 · Control compacto · Compilado " + buildTimestamp
 
         onXChanged: {
             if (visible)
@@ -6469,7 +6520,7 @@ ApplicationWindow {
                         text: "TUNE"
                         activeColor: "#8a6330"
                         Layout.preferredWidth: 54
-                        enabled: controlsEnabled()
+                        enabled: radioController.connected
                         tip: "Inicia el ciclo de ajuste del acoplador."
                         onClicked: radioController.startTuner()
                     }
@@ -6478,7 +6529,10 @@ ApplicationWindow {
                         Layout.minimumWidth: 75
                         Layout.preferredHeight: 28
                         color: "#071014"
-                        border.color: "#347e98"
+                        border.color:
+                            radioController.selectedVfo === 0
+                            ? "#347e98"
+                            : "#9a6630"
                         radius: 3
                         clip: true
                         Text {
@@ -6487,7 +6541,10 @@ ApplicationWindow {
                             text: radioController.frequencyMhzText
                                   + "  " + radioController.modeText
                                   + (radioController.dataMode ? "-D" : "")
-                            color: "#77dcff"
+                            color:
+                                radioController.selectedVfo === 0
+                                ? "#36c8ff"
+                                : "#ffb347"
                             font.family: "DejaVu Sans Mono"
                             font.pixelSize: 15
                             font.bold: true
@@ -8614,16 +8671,21 @@ ApplicationWindow {
                         text: "RADIO"
                         iconName: "connect"
                         iconColor:
-                            radioController.connected
+                            (radioController.connected || applicationLauncher.lanConnected)
                             ? "#39d871"
                             : "#49bfff"
 
-                        onClicked:
-                            radioController.connected
-                            ? radioController
-                              .disconnectRadio()
-                            : radioController
-                              .connectRadio()
+                        onClicked: {
+                            if (applicationLauncher.lanConnectionEnabled) {
+                                applicationLauncher.lanConnected
+                                ? applicationLauncher.disconnectLanConnection()
+                                : applicationLauncher.testLanConnection()
+                            } else {
+                                radioController.connected
+                                ? radioController.disconnectRadio()
+                                : radioController.connectRadio()
+                            }
+                        }
                     }
 
                     ToolbarButton {
@@ -8843,7 +8905,10 @@ ApplicationWindow {
                             : "#878787"
 
                         onClicked:
-                            radioController.selectVfoA()
+                            applicationLauncher.lanConnected
+                            ? (applicationLauncher.selectLanVfo(0),
+                               radioController.setSelectedVfoForLan(0))
+                            : radioController.selectVfoA()
                     }
 
                     ToolbarButton {
@@ -8855,7 +8920,10 @@ ApplicationWindow {
                             : "#878787"
 
                         onClicked:
-                            radioController.selectVfoB()
+                            applicationLauncher.lanConnected
+                            ? (applicationLauncher.selectLanVfo(1),
+                               radioController.setSelectedVfoForLan(1))
+                            : radioController.selectVfoB()
                     }
 
                     }
@@ -8921,10 +8989,8 @@ ApplicationWindow {
 
                             enabled:
                                 radioController.connected
-                                && (!radioController
-                                    .transmitting
-                                    || radioController
-                                       .pttOwned)
+                                && (!radioController.transmitting
+                                    || radioController.pttOwned)
 
                             background: Rectangle {
                                 radius: 2
@@ -8951,17 +9017,11 @@ ApplicationWindow {
                             ToolTip.text:
                                 "PTT momentáneo. Mantén pulsado para transmitir."
 
-                            onPressed:
-                                radioController
-                                .setTransmit(true)
+                            onPressed: radioController.setTransmit(true)
 
-                            onReleased:
-                                radioController
-                                .setTransmit(false)
+                            onReleased: radioController.setTransmit(false)
 
-                            onCanceled:
-                                radioController
-                                .setTransmit(false)
+                            onCanceled: radioController.setTransmit(false)
 
                             contentItem: Text {
                                 text:
@@ -9009,11 +9069,22 @@ text: "TUNER"
                             textPixelSize: 12
 text: "TUNE"
                             enabled:
-                                controlsEnabled()
+                                radioController.connected
 
-                            onClicked:
-                                radioController
-                                .startTuner()
+                            onClicked: radioController.startTuner()
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 28
+                            text: radioController.bandText
+                            color: "#f0a35b"
+                            font.pixelSize: 10
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            wrapMode: Text.Wrap
+                            elide: Text.ElideRight
                         }
 
                         }
@@ -9416,7 +9487,11 @@ text: "IP+"
                                                     spacing: 8
 
                                                     ColumnLayout {
-                                                        Layout.fillWidth: true
+                                                        // Ancho reservado para los estados; evita que un texto largo
+                                                        // desplace la rejilla de botones de modo.
+                                                        Layout.preferredWidth: 145
+                                                        Layout.minimumWidth: 145
+                                                        Layout.maximumWidth: 145
                                                         Layout.fillHeight: true
                                                         spacing: 0
 
@@ -9491,15 +9566,6 @@ text: "IP+"
                                                                     .scanActive
                                                                 caption: "SCAN"
                                                                 tagColor: "#8e3e7f"
-                                                            }
-
-                                                            Text {
-                                                                text:
-                                                                    radioController
-                                                                    .bandText
-                                                                color: "#e8e8e8"
-                                                                font.pixelSize: 10
-                                                                font.bold: true
                                                             }
 
                                                             Item {
@@ -9722,7 +9788,7 @@ text: "IP+"
                                                     radioController
                                                     .selectedVfo === 0
                                                     ? "#347e98"
-                                                    : "#387a48"
+                                                    : "#9a6630"
 
                                                 FrequencyDigits {
                                                     anchors.centerIn: parent
@@ -9737,6 +9803,24 @@ text: "IP+"
                                                     active: true
                                                 }
 
+                                                Text {
+                                                    anchors.right: parent.right
+                                                    anchors.rightMargin: 8
+                                                    anchors.bottom: parent.bottom
+                                                    anchors.bottomMargin: 5
+                                                    text:
+                                                        radioController.selectedVfo === 0
+                                                        ? "VFO-A"
+                                                        : "VFO-B"
+                                                    color:
+                                                        radioController.selectedVfo === 0
+                                                        ? "#36c8ff"
+                                                        : "#ffb347"
+                                                    font.family: "DejaVu Sans Mono"
+                                                    font.pixelSize: 12
+                                                    font.bold: true
+                                                }
+
                                                 Rectangle {
                                                     anchors.left:
                                                         parent.left
@@ -9749,7 +9833,7 @@ text: "IP+"
                                                         radioController
                                                         .selectedVfo === 0
                                                         ? "#42bfff"
-                                                        : "#65d779"
+                                                        : "#ffad4d"
                                                 }
                                             }
 
@@ -9805,14 +9889,17 @@ text: "IP+"
                                             RowLayout {
                                                 Layout.fillWidth: true
 
-                                                Text {
-                                                    text:
-                                                        radioController
+                                                    Text {
+                                                        text:
+                                                            radioController
                                                         .vfoText
                                                         + " · "
                                                         + radioController
                                                           .dataText
-                                                    color: "#69c8ff"
+                                                    color:
+                                                        radioController.selectedVfo === 0
+                                                        ? "#36c8ff"
+                                                        : "#ffb347"
                                                     font.pixelSize: 10
                                                     font.bold: true
                                                 }
@@ -9857,9 +9944,15 @@ text: "IP+"
 
                                                 onClicked: {
                                                     if (otherVfoNumber() === 0)
-                                                        radioController.selectVfoA()
+                                                        applicationLauncher.lanConnected
+                                                        ? (applicationLauncher.selectLanVfo(0),
+                                                           radioController.setSelectedVfoForLan(0))
+                                                        : radioController.selectVfoA()
                                                     else
-                                                        radioController.selectVfoB()
+                                                        applicationLauncher.lanConnected
+                                                        ? (applicationLauncher.selectLanVfo(1),
+                                                           radioController.setSelectedVfoForLan(1))
+                                                        : radioController.selectVfoB()
                                                 }
 
                                                 cursorShape:
@@ -10348,8 +10441,10 @@ text: "IP+"
                                                     controlsEnabled()
 
                                                 onClicked:
-                                                    radioController
-                                                    .setSplitEnabled(
+                                                    applicationLauncher.lanConnected
+                                                    ? applicationLauncher.setLanSplitEnabled(
+                                                        !radioController.splitEnabled)
+                                                    : radioController.setSplitEnabled(
                                                         !radioController
                                                         .splitEnabled
                                                     )
@@ -10402,8 +10497,14 @@ text: "IP+"
                                                     controlsEnabled()
 
                                                 onClicked:
-                                                    radioController
-                                                    .exchangeVfos()
+                                                    {
+                                                        if (applicationLauncher.lanConnected)
+                                                            applicationLauncher.exchangeLanVfos()
+                                                        else
+                                                            radioController.exchangeVfos()
+                                                        radioController.setSelectedVfoForLan(
+                                                            radioController.selectedVfo === 0 ? 1 : 0)
+                                                    }
                                             }
 
                                             PanelButton {
@@ -10413,8 +10514,9 @@ text: "IP+"
                                                     controlsEnabled()
 
                                                 onClicked:
-                                                    radioController
-                                                    .equalizeVfos()
+                                                    applicationLauncher.lanConnected
+                                                    ? applicationLauncher.equalizeLanVfos()
+                                                    : radioController.equalizeVfos()
                                             }
                                         }
 
@@ -10432,8 +10534,10 @@ text: "IP+"
                                                     controlsEnabled()
 
                                                 onClicked:
-                                                    radioController
-                                                    .setRitEnabled(
+                                                    applicationLauncher.lanConnected
+                                                    ? applicationLauncher.setLanRitEnabled(
+                                                        !radioController.ritEnabled)
+                                                    : radioController.setRitEnabled(
                                                         !radioController
                                                         .ritEnabled
                                                     )
@@ -10449,8 +10553,10 @@ text: "IP+"
                                                     controlsEnabled()
 
                                                 onClicked:
-                                                    radioController
-                                                    .setDeltaTxEnabled(
+                                                    applicationLauncher.lanConnected
+                                                    ? applicationLauncher.setLanDeltaTxEnabled(
+                                                        !radioController.deltaTxEnabled)
+                                                    : radioController.setDeltaTxEnabled(
                                                         !radioController
                                                         .deltaTxEnabled
                                                     )
@@ -10941,7 +11047,9 @@ text: "IP+"
                                                 text: "FIL1"
                                                 selected: radioController.filterText === "FIL1"
                                                 enabled: controlsEnabled()
-                                                onClicked: radioController.setFilter(1)
+                                                onClicked: applicationLauncher.lanConnected
+                                                           ? applicationLauncher.setLanFilter(1)
+                                                           : radioController.setFilter(1)
                                             }
 
                                             PanelButton {
@@ -10949,7 +11057,9 @@ text: "IP+"
                                                 text: "FIL2"
                                                 selected: radioController.filterText === "FIL2"
                                                 enabled: controlsEnabled()
-                                                onClicked: radioController.setFilter(2)
+                                                onClicked: applicationLauncher.lanConnected
+                                                           ? applicationLauncher.setLanFilter(2)
+                                                           : radioController.setFilter(2)
                                             }
 
                                             PanelButton {
@@ -10957,7 +11067,9 @@ text: "IP+"
                                                 text: "FIL3"
                                                 selected: radioController.filterText === "FIL3"
                                                 enabled: controlsEnabled()
-                                                onClicked: radioController.setFilter(3)
+                                                onClicked: applicationLauncher.lanConnected
+                                                           ? applicationLauncher.setLanFilter(3)
+                                                           : radioController.setFilter(3)
                                             }
                                         }
 
@@ -13471,6 +13583,10 @@ text: "IP+"
         }
 
         onClosing: function(close) {
+            if (window.applicationClosing) {
+                close.accepted = true
+                return
+            }
             close.accepted = false
             window.setMemoryQuickPanelVisible(false)
         }

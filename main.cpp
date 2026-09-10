@@ -14,6 +14,7 @@
 #include "morsetrainer.h"
 #include "remoteserver.h"
 #include "applicationlauncher.h"
+#include "build_timestamp.h"
 
 int main(int argc, char *argv[])
 {
@@ -47,7 +48,7 @@ int main(int argc, char *argv[])
     // explícito desde QML sigue llamando a Qt.quit().
     app.setQuitOnLastWindowClosed(false);
 
-    QGuiApplication::setOrganizationName(QStringLiteral("RamonLorenzo"));
+    QGuiApplication::setOrganizationName(QStringLiteral("Icom7300Mk2"));
     QGuiApplication::setApplicationName(
         QStringLiteral("Icom7300Mk2Control")
     );
@@ -62,7 +63,7 @@ int main(int argc, char *argv[])
     // con su lanzador mediante el nombre base del archivo .desktop.
     QGuiApplication::setDesktopFileName(
         QStringLiteral(
-            "es.ramonlorenzo.Icom7300Mk2Control"
+            "org.icom.Icom7300Mk2Control"
         )
     );
 
@@ -109,6 +110,44 @@ int main(int argc, char *argv[])
                      &radioController, [&radioController](qulonglong hz) {
         radioController.setExternalFrequency(hz);
     });
+    QObject::connect(&applicationLauncher, &ApplicationLauncher::lanReceiverFrameReceived,
+                     &radioController, &RadioController::receiveLanReceiverFrame);
+    QObject::connect(&applicationLauncher, &ApplicationLauncher::lanConnectionChanged,
+                     &radioController, [&applicationLauncher, &radioController]() {
+        if (applicationLauncher.lanConnected()) {
+            radioController.setLanReceiverWriter(
+                [&applicationLauncher](const QByteArray &payload, const QString &label) {
+                    return applicationLauncher.sendLanReceiverCommand(payload, label);
+                });
+            // Start the memory cache once the LAN CI-V writer is available.
+            // The QML connection signal can otherwise race the handshake.
+            QTimer::singleShot(800, &radioController, [&radioController]() {
+                radioController.readMemoryRange(1, 99);
+            });
+            QTimer::singleShot(2500, &radioController, [&radioController]() {
+                if (!radioController.memoryReadActive())
+                    radioController.readMemoryRange(1, 99);
+            });
+            QTimer::singleShot(5000, &radioController, [&radioController]() {
+                if (!radioController.memoryReadActive())
+                    radioController.readMemoryRange(1, 99);
+            });
+        } else {
+            radioController.setLanReceiverWriter({});
+        }
+    });
+    QTimer lanReceiverPoll;
+    lanReceiverPoll.setInterval(500);
+    QObject::connect(&lanReceiverPoll, &QTimer::timeout,
+                     &applicationLauncher, &ApplicationLauncher::pollLanReceiverState);
+    lanReceiverPoll.start();
+    QTimer lanSmeterPoll;
+    // The S-Meter has its own fast queue. It is sent without per-packet
+    // retries because the next reading arrives shortly afterwards.
+    lanSmeterPoll.setInterval(250);
+    QObject::connect(&lanSmeterPoll, &QTimer::timeout,
+                     &applicationLauncher, &ApplicationLauncher::pollLanSmeter);
+    lanSmeterPoll.start();
     if (applicationLauncher.lanConnectionEnabled() && radioController.autoConnectEnabled()) {
         QTimer::singleShot(500, &applicationLauncher, [&applicationLauncher]() {
             applicationLauncher.testLanConnection();
@@ -180,6 +219,10 @@ int main(int argc, char *argv[])
     );
 
     QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("buildTimestamp"),
+        QStringLiteral(APP_BUILD_TIMESTAMP)
+    );
     engine.rootContext()->setContextProperty(
         QStringLiteral("radioController"),
         &radioController
