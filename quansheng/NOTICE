@@ -1,0 +1,12 @@
+QuanshengDock-Linux — GPL-2.0-only
+
+Protocol framing, XOR key, CRC algorithm and UI field interpretation adapted from:
+QuanshengDock, code by -nicsure- 2024
+https://github.com/nicsure/QuanshengDock
+Tag: 0.32.22q
+Commit: 832e2fc9473de5035a8140cf17289c8d1ca2a1bc
+Files: QuanshengDock/Serial/Comms.cs and QuanshengDock/Serial/Packet.cs
+Upstream license: GNU General Public License version 2 (included in LICENSE).
+
+This native C++ implementation adds incremental buffered parsing, capture replay
+and passive Qt serial input. It is not the upstream Windows application.
