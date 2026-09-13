@@ -23,8 +23,11 @@ La inspección posterior del firmware 0.32.21q confirma que `SendReply` utiliza
 relleno `FF FF`, ofuscado con los índices XOR correspondientes, en esos dos bytes;
 no calcula un CRC de respuesta. El campo de diagnóstico compara únicamente con
 el algoritmo de comandos y no determina la validez de una respuesta.
-Se valida el terminador. No hay constructor ni emisor de comandos en producción.
-La trama Hello de tests es exclusivamente un vector sintético, nunca se envía.
+Se valida el terminador. La revisión estable READ-ONLY no incluye constructor ni
+emisor de comandos. Las identificaciones históricas de `0x0870`, `0x0851`,
+`0x052f`, `0x0850` y `0x0871` se conservan únicamente como conocimiento del
+protocolo upstream; ninguna de esas tramas se envía. La trama Hello de tests fue
+inicialmente un vector sintético y nunca se envía.
 
 ## UI
 

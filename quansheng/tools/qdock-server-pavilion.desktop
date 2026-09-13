@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Servidor Quansheng UV-K5
+GenericName=Servidor LAN del UV-K5
+Comment=Inicia qdock-server en observación serie READ-ONLY
+Exec=/home/ramon/qdock-capture-test/tools/start-qdock-pavilion.sh
+Path=/home/ramon/qdock-capture-test
+Terminal=true
+Categories=HamRadio;Network;
+StartupNotify=true

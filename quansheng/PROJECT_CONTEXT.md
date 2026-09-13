@@ -8,6 +8,102 @@ IC-7300MK2, denominación proporcionada por el usuario.
 Este documento permite retomar el trabajo sin acceder a la conversación original.
 No confundir el port nativo con QuanshengDock Windows bajo Wine.
 
+## Punto estable READ-ONLY — 13 de septiembre de 2026
+
+**CONFIRMADO por prueba física del usuario en el Pavilion:** `qdock-server`,
+abriendo `/dev/ttyUSB0` con `QIODevice::ReadOnly`, recibe por LAN frecuencia,
+estado RX, batería, modos y otras observaciones de la radio. La aplicación
+principal las presenta sin compartir el controlador CI-V del Icom.
+
+En la primera apertura los contadores permanecieron a cero y apareció
+temporalmente `Timeout` en la pantalla del UV-K5; al desconectar y reiniciar la
+radio recuperó su funcionamiento normal. Una repetición posterior funcionó y
+recibió datos. Mantener este antecedente visible y detener la prueba si reaparece.
+
+**LÍMITE ESTABLE:** no existe en esta revisión ruta de escritura serie, cambio
+de frecuencia o modo, handshake, teclas, TX/PTT, EEPROM ni firmware. El servidor
+rechaza todos los mensajes LAN de control. Continuar únicamente ampliando y
+validando la lectura de datos. Cualquier escritura futura requiere instrucción
+expresa y debe desarrollarse después de este punto estable.
+
+## Segunda fase — servidor serie y prueba LAN entre PCs
+
+### Actualización: escucha física y captura cruda
+
+**CONFIRMADO por resultado del usuario:** 5/5 suites aprobadas en el Pavilion
+con SerialPort habilitado. Después, escucha física autorizada con radio encendida:
+73777 bytes, 456 candidatos globales, 71041 descartados, 0 pendientes y cierre
+sin error. El JSON del cliente contiene 376 eventos (81–456), pues se suscribió
+después de los primeros 80. Son 188 pares 5/6; todos los estados recibidos son
+power_save/7.84 V, sin texto. Registro preservado y análisis en
+`docs/LIVE_SESSION_2026-09-11.md`. Recepción física PARCIALMENTE CONFIRMADA.
+La prueba previa de 208 bytes/0 eventos fue con la radio apagada, según aclaró
+el usuario; no valida comunicación ni determina el origen de esos bytes.
+
+Se añade captura cruda opcional --capture al servidor: archivo nuevo, bytes antes
+del parser, errores de creación/escritura/finalización visibles, sin sobrescribir.
+Se guarda en el PC servidor y no depende de clientes LAN. Los tests PTY cubren
+contenido exacto (ruido y truncación), cliente tardío, protección de archivo
+existente, directorio inexistente y fallo de escritura mediante límite de archivo.
+La validación física de esta nueva captura está PENDIENTE y requerirá nueva prueba.
+Esta actualización prevalece sobre los pendientes históricos siguientes.
+
+**CONFIRMADO por salida aportada por el usuario el 11 de septiembre de 2026:**
+compilación del servidor en ~/qdock-lan-test del Pavilion con SerialPort OFF;
+replay TCP desde 192.168.1.78 al HP principal con 16968 bytes, 286 candidatos,
+14713 descartados, 0 pendientes y ended, sesión
+04b248e8-a289-4133-b658-ae09a8e16840. No se ha aportado la salida de CTest del
+Pavilion; no inferir que se ejecutó o aprobó a partir del replay.
+El usuario habilitó SSH en el Pavilion para esta preparación. El agente sigue
+sin autenticación SSH automática; las transferencias las realizó el usuario.
+
+**CONFIRMADO en código y pruebas locales:** segunda fase con fuente serie única
+compartida por clientes, --serial/--seconds, configuración ReadOnly reutilizada
+del probe, errores y fin de adquisición publicados sin terminar el servidor.
+Cinco suites aprobadas con QDOCK_SERIAL=ON, incluida lan-serial-read-only sobre
+PTY: dos clientes, entrada fragmentada, ausencia de salida serie, cliente tardío,
+rechazo PTT, desconexión y límite temporal. Sin modificar el parser ni el Icom.
+
+**PENDIENTE:** prueba física de este servidor con UV-K5, captura cruda del servidor,
+reconexión automática, saturación/estabilidad prolongada, GUI/modelo normalizado,
+resolución del falso positivo. No se ha abierto ningún puerto físico ni habilitado
+TX/PTT. La recepción física histórica sigue PARCIALMENTE CONFIRMADA.
+
+Esta sección prevalece sobre los pendientes históricos de las secciones siguientes.
+
+## Actualización en el repositorio integrado — 11 de septiembre de 2026
+
+Esta sección actualiza el alcance LAN; los apartados históricos posteriores
+conservan la evidencia original del traspaso y sus límites físicos.
+
+**CONFIRMADO en compilación y pruebas locales:** añadido `qdock-server` con
+TCP/JSON autenticado y fuente exclusivamente replay, cliente diagnóstico Python
+`tools/lan_client.py` y suite `lan-replay`. Serialización JSON extraída del probe
+a `src/eventjson.*`, sin modificar el parser ni su interpretación. Compilación
+Ninja con QDOCK_SERIAL=ON y 4/4 suites aprobadas (parser, probe-cli, lan-replay,
+serial-read-only). La prueba TCP requirió ejecución fuera del sandbox: dentro,
+QTcpServer falló al escuchar con "Unknown error". No se desactivaron pruebas.
+
+La suite LAN compara los 286 eventos del fixture de pantalla con el probe,
+comprueba dos clientes simultáneos, fragmentación TCP, autenticación y rechazo
+de control. El texto espurio de 181 bytes sigue presente como candidato.
+**PENDIENTE:** resolver la falsa sincronización; no se ha validado estado de radio.
+
+**CONFIRMADO como requisito del usuario:** el UV-K5 permanece actualmente en el
+Pavilion por problemas USB cuya causa no está determinada. En el futuro ambas
+radios pueden estar en el HP principal; el servidor Quansheng podrá ser local
+(127.0.0.1). La GUI deberá contemplar operación simultánea e independiente de
+ambas radios, incluyendo RX/TX y TX/TX cuando dichas capacidades estén autorizadas
+e implementadas. Este requisito no habilita TX/PTT Quansheng en la fase actual.
+
+**PENDIENTE:** validación LAN entre PCs, lector serie del servidor, reconexión,
+modelo observable/GUI, LCD y frecuencia/canal fiables. No se modificó código
+Icom, no se abrió radio, ni se cambiaron servicios del Pavilion. La autorización
+para comenzar la integración no se interpreta como permiso para comandos físicos.
+
+Consultar `docs/LAN_PROTOCOL.md` para el contrato exacto y `README.md` para uso.
+La recepción física continúa **PARCIALMENTE CONFIRMADA**, sin nuevas capturas.
+
 ## 1. Cómo interpretar el estado
 
 - **CONFIRMADO**: comprobado en el código, herramientas o pruebas indicadas.
@@ -504,6 +600,14 @@ pasiva; no convertirla en permiso general de control, TX o modificación de radi
 13. Conservar licencia, atribuciones, pruebas y límites de validación al integrar.
 
 ## 10. Trabajo incompleto y siguiente punto de continuación
+
+**PARCIALMENTE CONFIRMADO — integración inicial en la GUI Icom:** la aplicación
+principal incorpora un cliente TCP independiente (`QuanshengClient`) y un panel
+compacto de observación para conectar al servidor `qdock-lan/1`. El panel muestra
+conexión, estado de fuente, batería candidata, contadores y errores, y mantiene
+TX/PTT deshabilitado. No convierte textos de UI en frecuencia/canal ni comparte
+`RadioController`; ambos protocolos siguen separados. La prueba de compilación
+del ejecutable Icom se realizó en `/tmp/icom-gui-build`.
 
 **PENDIENTE inmediato:** mejorar la recuperación/validación de UI para evitar el
 texto espurio conocido. Trabajar primero offline con `radio-screen.hex`; añadir

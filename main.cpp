@@ -14,6 +14,7 @@
 #include "morsetrainer.h"
 #include "remoteserver.h"
 #include "applicationlauncher.h"
+#include "quanshengclient.h"
 #include "build_timestamp.h"
 
 int main(int argc, char *argv[])
@@ -106,6 +107,7 @@ int main(int argc, char *argv[])
     MorseTrainer morseTrainer;
     RemoteServer remoteServer(&radioController);
     ApplicationLauncher applicationLauncher;
+    QuanshengClient quanshengClient;
     QObject::connect(&applicationLauncher, &ApplicationLauncher::lanFrequencyReceived,
                      &radioController, [&radioController](qulonglong hz) {
         radioController.setExternalFrequency(hz);
@@ -196,6 +198,13 @@ int main(int argc, char *argv[])
     QObject::connect(
         &app,
         &QCoreApplication::aboutToQuit,
+        &quanshengClient,
+        &QuanshengClient::shutdown,
+        Qt::DirectConnection
+    );
+    QObject::connect(
+        &app,
+        &QCoreApplication::aboutToQuit,
         &radioController,
         &RadioController::shutdown,
         Qt::DirectConnection
@@ -239,6 +248,10 @@ int main(int argc, char *argv[])
         QStringLiteral("applicationLauncher"),
         &applicationLauncher
     );
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("quanshengClient"),
+        &quanshengClient
+    );
 
     const QUrl mainQmlUrl(QStringLiteral("qrc:/Main.qml"));
 
@@ -255,6 +268,12 @@ int main(int argc, char *argv[])
     );
 
     engine.load(mainQmlUrl);
+
+    if (quanshengClient.autoConnectOnStartup()) {
+        QTimer::singleShot(0, &quanshengClient, [&quanshengClient]() {
+            quanshengClient.connectToServer();
+        });
+    }
 
     return app.exec();
 }

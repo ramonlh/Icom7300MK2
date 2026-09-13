@@ -29,6 +29,8 @@ qt_add_executable(Icom7300Mk2Control
     morsetrainer.h
     remoteserver.cpp
     remoteserver.h
+    quanshengclient.cpp
+    quanshengclient.h
 )
 
 # Refresh the timestamp on every build, including incremental builds.

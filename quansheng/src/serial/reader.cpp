@@ -8,20 +8,16 @@
 #include <termios.h>
 
 namespace qdock {
-void listPorts() {
-    QTextStream out(stdout);
-    for (const auto& info : QSerialPortInfo::availablePorts())
-        out << info.systemLocation() << '\t' << info.description() << '\n';
-}
-int readSerial(const QString& name, int seconds,
-               const std::function<bool(const QByteArray&)>& receive) {
-    QSerialPort port;
+namespace {
+bool openConfigured(QSerialPort& port, const QString& name,
+                    QIODevice::OpenMode mode, QString& error) {
     port.setPortName(name);
     if (!port.setBaudRate(38400) || !port.setDataBits(QSerialPort::Data8) ||
         !port.setParity(QSerialPort::NoParity) || !port.setStopBits(QSerialPort::OneStop) ||
-        !port.setFlowControl(QSerialPort::NoFlowControl) || !port.open(QIODevice::ReadOnly)) {
-        QTextStream(stderr) << "No se puede abrir/configurar el puerto: " << port.errorString() << '\n';
-        return 1;
+        !port.setFlowControl(QSerialPort::NoFlowControl) || !port.open(mode)) {
+        error = "No se puede abrir/configurar el puerto: " + port.errorString();
+        port.close();
+        return false;
     }
     port.setReadBufferSize(65536);
     termios settings{};
@@ -31,7 +27,29 @@ int readSerial(const QString& name, int seconds,
         (settings.c_cflag & (PARENB | CSTOPB | CRTSCTS)) != 0 ||
         (settings.c_iflag & (IXON | IXOFF | ISTRIP | INLCR | IGNCR | ICRNL)) != 0 ||
         (settings.c_lflag & (ICANON | ECHO | ISIG)) != 0) {
-        QTextStream(stderr) << "La configuración efectiva del puerto no es 38400 8N1 raw sin control de flujo.\n";
+        error = "La configuración efectiva del puerto no es 38400 8N1 raw sin control de flujo.";
+        port.close();
+        return false;
+    }
+    return true;
+}
+}
+
+void listPorts() {
+    QTextStream out(stdout);
+    for (const auto& info : QSerialPortInfo::availablePorts())
+        out << info.systemLocation() << '\t' << info.description() << '\n';
+}
+bool openReadOnly(QSerialPort& port, const QString& name, QString& error) {
+    return openConfigured(port, name, QIODevice::ReadOnly, error);
+}
+
+int readSerial(const QString& name, int seconds,
+               const std::function<bool(const QByteArray&)>& receive) {
+    QSerialPort port;
+    QString error;
+    if (!openReadOnly(port, name, error)) {
+        QTextStream(stderr) << error << '\n';
         return 1;
     }
     QObject::connect(&port, &QSerialPort::readyRead, &port, [&] {

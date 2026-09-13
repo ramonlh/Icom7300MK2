@@ -98,8 +98,31 @@ ApplicationWindow {
             Qt.callLater(positionMemoryQuickWindow)
     }
 
-    onClosing: {
+    Timer {
+        id: applicationShutdownTimer
+        interval: 200
+        repeat: false
+        onTriggered: Qt.quit()
+    }
+
+    onClosing: function(close) {
+        if (applicationClosing)
+            return
+        // Keep the main window alive briefly while Qt removes Popup content
+        // from Overlay.overlay. Destroying an open popup together with its
+        // QQuickWindow can crash inside QQuickItem teardown on Qt 6.4.
+        close.accepted = false
         applicationClosing = true
+        quanshengPopup.close()
+        bandStackingConfirmDialog.close()
+        storeMemoryConfirmDialog.close()
+        clearMemoryConfirmDialog.close()
+        toneRttySettingsPopup.close()
+        cwSettingsPopup.close()
+        txSettingsPopup.close()
+        digitalFrequencyPopup.close()
+        diagnosticsPopup.close()
+        settingsPopup.close()
         // Notify the IC-7300 before Qt tears down the event loop.
         applicationLauncher.shutdownLanConnection()
         if (compactWindow.visible)
@@ -125,9 +148,9 @@ ApplicationWindow {
         settingsVisible = false
         radioController.stopSpectrumScope()
         radioController.shutdown()
-        // Fuerza la terminación aunque alguna Window auxiliar siga creada
-        // pero oculta. El puerto CI-V ya está cerrado en este punto.
-        Qt.quit()
+        // Give close transitions and Overlay reparenting one event-loop turn
+        // before destroying QQmlApplicationEngine.
+        applicationShutdownTimer.start()
     }
 
     property var modeNames: [
@@ -1327,6 +1350,156 @@ ApplicationWindow {
             return "Aviso de saturación de entrada."
 
         return ""
+    }
+
+    // Estado del UV-K5. PTT permanece bloqueado; la frecuencia RX solo se
+    // habilita cuando el servidor se inició con autorización explícita.
+    Button {
+        id: quanshengOpenButton
+        text: quanshengClient.connected
+              ? (quanshengClient.observationFresh ? "UV-K5 ●" : "UV-K5 ◐")
+              : "UV-K5"
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 10
+        z: 1000
+        onClicked: quanshengPopup.open()
+        background: Rectangle {
+            radius: 3
+            color: quanshengClient.connected
+                   ? (quanshengClient.observationFresh ? "#356b45" : "#765f2c")
+                   : "#3a3d3f"
+            border.color: "#8a9398"
+            border.width: 1
+        }
+    }
+
+    Popup {
+        id: quanshengPopup
+        width: 640
+        height: 500
+        x: Math.max(8, window.width - width - 16)
+        y: Math.max(8, window.height - height - 52)
+        modal: false
+        focus: true
+        padding: 12
+
+        background: Rectangle {
+            color: "#292d30"
+            border.color: "#7f8a91"
+            border.width: 1
+            radius: 4
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 7
+
+            Label {
+                text: "QUANSHENG UV-K5 · LAN"
+                color: "#ffffff"
+                font.bold: true
+                font.pixelSize: 14
+                Layout.fillWidth: true
+            }
+
+            Label {
+                text: "Observación pasiva · frecuencia y TX/PTT deshabilitados"
+                color: "#9da8ad"
+                font.pixelSize: 10
+                Layout.fillWidth: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Button {
+                    text: quanshengClient.connected ? "Desconectar" : "Conectar"
+                    onClicked: quanshengClient.connected
+                              ? quanshengClient.disconnectFromServer()
+                              : quanshengClient.connectToServer()
+                }
+                Label {
+                    text: quanshengClient.sourceStatus
+                    color: quanshengClient.connected ? "#8fdb9b" : "#e5c07b"
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 96
+                    color: "#202629"
+                    border.color: "#506069"
+                    radius: 5
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 4
+                        Label { text: "VFO A · " + (quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M") ? "Memoria" : "VFO"); color: "#8fd3ed"; font.bold: true }
+                        Label { text: quanshengClient.vfoAFrequencyText !== "" ? quanshengClient.vfoAFrequencyText + " MHz" : "—"; color: "#ffffff"; font.pixelSize: 22; font.bold: true }
+                        Label { visible: quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M"); text: "Canal / nombre"; color: "#83949d"; font.pixelSize: 9 }
+                        Label { visible: quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M"); text: (quanshengClient.vfoAMemory || "—") + " · " + (quanshengClient.vfoAName || "sin nombre"); color: "#d6dadd"; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Label { text: "Modo / potencia TX"; color: "#83949d"; font.pixelSize: 9 }
+                        Label { text: (quanshengClient.vfoAMode || "pendiente") + " · " + (quanshengClient.vfoAPower || "pendiente"); color: "#aeb9be"; elide: Text.ElideRight; Layout.fillWidth: true }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 96
+                    color: "#202629"
+                    border.color: "#506069"
+                    radius: 5
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 4
+                        Label { text: "VFO B · " + (quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M") ? "Memoria" : "VFO"); color: "#8fd3ed"; font.bold: true }
+                        Label { text: quanshengClient.vfoBFrequencyText !== "" ? quanshengClient.vfoBFrequencyText + " MHz" : "—"; color: "#ffffff"; font.pixelSize: 22; font.bold: true }
+                        Label { visible: quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M"); text: "Canal / función"; color: "#83949d"; font.pixelSize: 9 }
+                        Label { visible: quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M"); text: (quanshengClient.vfoBMemory || "—") + " · " + (quanshengClient.vfoBName || "sin nombre"); color: "#d6dadd"; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Label { text: "Modo / potencia TX"; color: "#83949d"; font.pixelSize: 9 }
+                        Label { text: (quanshengClient.vfoBMode || "pendiente") + " · " + (quanshengClient.vfoBPower || "pendiente"); color: "#aeb9be"; elide: Text.ElideRight; Layout.fillWidth: true }
+                    }
+                }
+            }
+
+            GridLayout {
+                columns: 4
+                Layout.fillWidth: true
+                columnSpacing: 8
+                rowSpacing: 3
+                Label { text: "Batería"; color: "#aeb9be" }
+                Label { text: quanshengClient.batteryVolts > 0 ? Number(quanshengClient.batteryVolts).toFixed(2) + " V" : "—"; color: "#ffffff" }
+                Label { text: "Estado"; color: "#aeb9be" }
+                Label {
+                    text: quanshengClient.candidateState || "—"
+                    color: "#ffffff"
+                }
+                Label { text: "Eventos"; color: "#aeb9be" }
+                Label { text: String(quanshengClient.eventCount); color: "#ffffff" }
+                Label { text: "TX/PTT"; color: "#aeb9be" }
+                Label { text: "deshabilitado"; color: "#e06c75" }
+            }
+
+            Label {
+                text: quanshengClient.error || "VFO A y VFO B son observaciones candidatas; el canal aún no está normalizado."
+                color: quanshengClient.error ? "#e06c75" : "#aab4ba"
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            Button {
+                text: "Reiniciar contadores"
+                onClicked: quanshengClient.resetCounters()
+                Layout.alignment: Qt.AlignRight
+            }
+        }
     }
 
     component FrameBox: Rectangle {
@@ -7116,7 +7289,7 @@ ApplicationWindow {
                             PanelButton {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 42
-                                text: "CONEXIÓN CI-V"
+                                text: "CONEXIÓN ICOM"
                                 selected:
                                     settingsPopup
                                     .sectionIndex === 0
@@ -7163,6 +7336,19 @@ ApplicationWindow {
                                 onClicked:
                                     settingsPopup
                                     .sectionIndex = 3
+                            }
+
+                            PanelButton {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 42
+                                text: "QUANSHENG LAN"
+                                selected:
+                                    settingsPopup
+                                    .sectionIndex === 4
+                                activeColor: "#557b69"
+                                onClicked:
+                                    settingsPopup
+                                    .sectionIndex = 4
                             }
 
                             Item {
@@ -8156,6 +8342,117 @@ ApplicationWindow {
                                 }
                             }
                         }
+
+                        ScrollView {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            contentWidth: availableWidth
+
+                            ColumnLayout {
+                                width: parent.width
+                                spacing: 8
+
+                                FrameBox {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 235
+                                    color: "#171a1c"
+
+                                    GridLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 9
+                                        columns: 3
+                                        rowSpacing: 8
+                                        columnSpacing: 8
+
+                                        Text { text: "Host"; color: "#d9e0e4"; font.pixelSize: 10; font.bold: true }
+                                        TextField {
+                                            id: quanshengSettingsHost
+                                            Layout.columnSpan: 2
+                                            Layout.fillWidth: true
+                                            text: quanshengClient.host
+                                            placeholderText: "192.168.1.78"
+                                            onEditingFinished: quanshengClient.host = text
+                                        }
+                                        Text { text: "Puerto"; color: "#d9e0e4"; font.pixelSize: 10; font.bold: true }
+                                        SpinBox {
+                                            id: quanshengSettingsPort
+                                            Layout.columnSpan: 2
+                                            from: 1; to: 65535
+                                            value: quanshengClient.port
+                                            editable: true
+                                            onValueModified: quanshengClient.port = value
+                                        }
+                                        Text { text: "Token"; color: "#d9e0e4"; font.pixelSize: 10; font.bold: true }
+                                        TextField {
+                                            id: quanshengSettingsToken
+                                            Layout.columnSpan: 2
+                                            Layout.fillWidth: true
+                                            text: quanshengClient.token
+                                            echoMode: TextInput.Password
+                                            onEditingFinished: quanshengClient.token = text
+                                        }
+                                        CheckBox {
+                                            id: quanshengAutoReconnectCheck
+                                            Layout.columnSpan: 3
+                                            text: "Reconectar automáticamente si el servidor vuelve a estar disponible"
+                                            checked: quanshengClient.autoReconnect
+                                            onToggled: quanshengClient.autoReconnect = checked
+                                            palette.text: "#d9e0e4"
+                                            contentItem: Text {
+                                                text: quanshengAutoReconnectCheck.text
+                                                color: "#d9e0e4"
+                                                font.pixelSize: 10
+                                                verticalAlignment: Text.AlignVCenter
+                                                anchors.left: parent.left
+                                                anchors.leftMargin: 28
+                                                anchors.right: parent.right
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                        }
+                                        CheckBox {
+                                            id: quanshengAutoConnectCheck
+                                            Layout.columnSpan: 3
+                                            text: "Conectar automáticamente al iniciar la aplicación"
+                                            checked: quanshengClient.autoConnectOnStartup
+                                            onToggled: quanshengClient.autoConnectOnStartup = checked
+                                            palette.text: "#d9e0e4"
+                                            contentItem: Text {
+                                                text: quanshengAutoConnectCheck.text
+                                                color: "#d9e0e4"
+                                                font.pixelSize: 10
+                                                verticalAlignment: Text.AlignVCenter
+                                                anchors.left: parent.left
+                                                anchors.leftMargin: 28
+                                                anchors.right: parent.right
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                        }
+
+                                        Item { Layout.columnSpan: 3; Layout.preferredHeight: 2 }
+
+                                        PanelButton {
+                                            Layout.columnSpan: 1
+                                            Layout.preferredWidth: 140
+                                            text: quanshengClient.connected ? "DESCONECTAR" : "CONECTAR"
+                                            selected: quanshengClient.connected
+                                            activeColor: "#3d7650"
+                                            onClicked: {
+                                                if (quanshengClient.connected) {
+                                                    quanshengClient.disconnectFromServer()
+                                                } else {
+                                                    quanshengClient.host = quanshengSettingsHost.text
+                                                    quanshengClient.port = quanshengSettingsPort.value
+                                                    quanshengClient.token = quanshengSettingsToken.text
+                                                    quanshengClient.connectToServer()
+                                                }
+                                            }
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -8763,8 +9060,8 @@ ApplicationWindow {
                         accentColor: "#b68b45"
 
                     ToolbarButton {
-                        text: "CI-V"
-                        Layout.preferredWidth: 45
+                        text: "CONFIG"
+                        Layout.preferredWidth: 55
                         Layout.minimumWidth: 40
                         iconName: "settings"
                         iconColor:
