@@ -59,6 +59,102 @@ Primero ejecutar tests offline y sobre pseudoterminal; después, con autorizaci�
 capturar 15 segundos de puerto real y reproducirlos. No confundir fixtures
 sintéticos con evidencia de compatibilidad física.
 
+## Consulta RSSI experimental
+
+**CONFIRMADO en el firmware 0.32.21q y en pruebas offline; PENDIENTE de prueba
+física:** `0x0527` no lleva parámetros. La respuesta `0x0528` contiene cuatro
+bytes: RSSI LE16 limitado a 9 bits, indicador de ruido limitado a 7 bits e
+indicador de glitch de 8 bits. `qdock-rssi-query` es un ejecutable separado que
+envía exactamente una consulta y rechaza otras respuestas. No está integrado en
+`qdock-server` ni en el lanzador READ-ONLY.
+El firmware convierte primero el valor mediante `raw / 2 - 160`; la pantalla
+añade después una corrección dependiente de la banda y calcula S0–S9 y el exceso
+sobre S9 con los niveles configurados en EEPROM. La utilidad etiqueta ese primer
+resultado como `dbm_uncorrected` y no inventa la corrección de banda.
+
+## Lectura experimental de registros BK4819
+
+`0x0851` recibe un contador LE16 seguido de hasta 50 direcciones LE16. El
+firmware responde con un paquete `0x0951` independiente por dirección, formado
+por dirección LE16 y valor LE16. `qdock-register-query` recorre el rango completo
+del BK4819, `0x00-0x7F`, en tres lotes de 50, 50 y 28 registros. La herramienta
+no contiene ni invoca `WriteRegisters 0x0850`, EEPROM, GPIO, teclas, frecuencia,
+TX o PTT. Es una herramienta experimental separada del servidor.
+
+La telemetría experimental decodifica además `0x30` como habilitación de bloques
+BK4819 (RX/TX DSP, enlaces RX/PLL, AF, discriminador, PA, micrófono y calibración
+VCO), y `0x7E` como modo/índice AGC, intensidad interna y filtros DC. En `0x73`
+solo está confirmado el bit 4, que desactiva AFC cuando vale uno. No se presenta
+`0x73` como registro de interrupciones. Las banderas de interrupción están en
+`0x02`; no se consultan periódicamente para evitar posibles efectos al leerlas.
+
+El conjunto periódico se amplía a 16 registros. Se interpretan `0x31` (VOX,
+scrambler y compander), `0x33` (RX, PA, LNA VHF/UHF y LED), `0x47` (selección de
+ruta de audio), `0x48` (índices de las dos etapas de ganancia y DAC) y `0x49`
+(selección LO y umbrales alto/bajo del RF AGC). `0x37` se transporta únicamente
+en bruto porque su desglose no está suficientemente confirmado.
+
+Para no saturar el enlace serie, `0x38/0x39` se consultan cada dos segundos y se
+publican como `register_frequency_state`; GetRssi conserva su intervalo de un
+segundo. Los otros 14 registros se consultan y publican conjuntamente cada treinta
+segundos. Los valores recientes de `0x38/0x39` se incorporan a la lista bruta sin
+volver a leerlos en la consulta lenta.
+
+La consulta lenta incorpora también `0x43`, `0x4D`, `0x4E`, `0x4F` y `0x78`.
+Se exponen el modo/ancho de filtro receptor y los umbrales brutos de apertura y
+cierre del squelch para RSSI, ruido y glitch, además de sus índices de retardo.
+Los umbrales se mantienen en unidades del registro; no se convierten a dBm ni a
+tiempo hasta disponer de una equivalencia confirmada.
+
+Se incorporan al mismo lote lento `0x36`, `0x51`, `0x52` y `0x70`. Se publican
+el estado y los índices de bias/ganancia del PA, la habilitación y modo
+CTCSS/CDCSS, sus umbrales y cola, y los estados/ganancias de Tone1 y Tone2. Son
+observaciones técnicas; no habilitan transmisión ni modifican ningún registro.
+
+La consulta lenta se amplía a 30 registros con `0x19`, `0x28`, `0x29`, `0x3D`,
+`0x46`, `0x79` y `0x7A`: AGC de micrófono, parámetros del expansor RX y compresor
+TX, valor IF/modulación, umbrales VOX y código de retardo. Permanecen en el ciclo
+de 30 segundos. El cliente los presenta junto con los anteriores en orden, con
+dirección, valor hexadecimal e interpretación; los campos no confirmados se
+identifican expresamente como pendientes.
+
+El lote lento se amplía posteriormente a 47 registros, todavía dentro del
+máximo de 50 direcciones de una consulta. Se incorporan `0x07`, `0x10-0x14`,
+`0x24`, `0x32`, `0x50`, `0x63`, `0x64`, `0x6F`, `0x71`, `0x72` y `0x7B-0x7D`:
+control de tono, tabla AGC, detector DTMF/SelCall, estado del escáner, mute TX,
+glitch, amplitud VOX/voz, nivel AF, palabras de Tone1/Tone2 y configuración
+RSSI/AGC. `0x02` y `0x3F` continúan excluidos porque contienen banderas de
+interrupción y no se presupone que su lectura carezca de efectos laterales.
+La primera consulta del lote se lanza 3,5 segundos después de abrir la sesión,
+desfasada de RSSI y frecuencia; una vez realizada, el temporizador continúa con
+el periodo normal de 30 segundos. Así el cliente no comienza con la tabla vacía
+durante medio minuto.
+El cliente duplica en la zona de usuario sólo un resumen de funciones, escáner,
+filtro RX, squelch, CTCSS/CDCSS, DTMF/SelCall y generadores de tono. La tabla
+completa permanece en diagnóstico y ninguna de estas observaciones habilita
+escritura de registros.
+
+## Lectura experimental de EEPROM
+
+El núcleo implementa y prueba offline exclusivamente la construcción de
+`ReadEeprom 0x051B` y la decodificación de `ReadEepromReply 0x051C`. Cada lectura
+admite de 1 a 128 bytes y queda limitada al rango físico `0x0000-0x1FFF`. La
+petición contiene offset LE16, tamaño, padding y un identificador de sesión LE32.
+No se ha implementado constructor para `WriteEeprom 0x051D`.
+
+La radio sólo responde si el identificador coincide con el `Timestamp` de la
+sesión previamente establecida. La utilidad independiente `qdock-eeprom-query`
+establece explícitamente la sesión `0x12345678` mediante `Hello 0x0514`, espera
+la respuesta `0x0515` y solicita un único bloque. Advierte que `Hello` puede
+apagar la iluminación. No usa `0x052F`, que reinicializa otros estados, ni se
+integra en la telemetría periódica. Su validación con radio física está pendiente.
+
+El lote alcanza finalmente el máximo de 50 direcciones con `0x0B`, `0x0C` y
+`0x21`. Los dos primeros exponen el código DTMF/5-tone detectado y los campos de
+tipo/desplazamiento CTCSS/CDCSS que el propio firmware consulta. `0x21` se
+identifica como configuración base del detector DTMF, pero su desglose permanece
+pendiente y se muestra como tal. No se añaden `0x02` ni `0x3F`.
+
 ## Diagnóstico físico del 10 de septiembre de 2026
 
 Firmware de referencia inspeccionado: tag `0.32.21q`, commit

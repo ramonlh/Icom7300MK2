@@ -79,6 +79,43 @@ incluido el falso positivo conocido. Esta fase no modifica la GUI Icom.
 
 Contrato, límites y arquitectura local/remota: [docs/LAN_PROTOCOL.md](docs/LAN_PROTOCOL.md).
 
+El servidor publica además un modelo pasivo `display_state` derivado de la
+pantalla: VFO A/B, selector activo y frecuencia reconstruida. En el fixture real
+se verifican `145.67500` y la frecuencia fragmentada `110.937` + `50` →
+`110.93750`. Una captura física posterior confirma también el formato de VFO
+libre `435.900` + `00` → `435.90000`. Estos valores siguen siendo observaciones,
+nunca controles.
+
+El panel muestra también señal cruda, porcentaje aproximado de batería, paso,
+tono/último DTMF e indicadores observados como scan, DWR, cross-band, VOX,
+bloqueo, función y carga. La señal no se presenta en dBm y el tono no se
+clasifica como CTCSS/DCS hasta disponer de evidencia suficiente.
+
+La utilidad experimental `qdock-register-query` lee los 128 registros BK4819
+(`0x00-0x7F`) en tres lotes, sin escribir registros ni acceder a EEPROM o GPIO.
+Debe utilizarse con el servidor detenido, pues el puerto serie es exclusivo.
+
+La utilidad experimental `qdock-eeprom-query` realiza una sola lectura EEPROM
+de 1 a 128 bytes dentro de `0x0000-0x1FFF`. Inicia una sesión con `Hello 0x0514`,
+espera `0x0515` y envía exclusivamente `ReadEeprom 0x051B`; no implementa
+`WriteEeprom 0x051D`. `Hello` puede apagar la iluminación de la pantalla. Debe
+ejecutarse con cualquier servidor serie detenido. Primera prueba propuesta:
+
+```sh
+sg dialout -c './build/qdock-eeprom-query /dev/ttyUSB0 0x0000 16'
+```
+
+El servidor admite además `--allow-eeprom-query`. Con esa autorización explícita,
+el botón **Leer EEPROM…** del cliente solicita los 8192 bytes en bloques de 128 y
+los presenta como tabla interpretada de 200 canales (nombre, frecuencias RX/TX,
+desplazamiento, modo, ancho, potencia, tonos, paso, listas y opciones), conservando
+una vista hexadecimal secundaria. Una segunda tabla interpreta VFO/bandas, radio
+FM, ajustes generales, pantalla, teclas, escaneo, DTMF, contactos y calibraciones.
+Los secretos se ocultan y las magnitudes de calibración no confirmadas se conservan
+en bruto. La ruta solo contiene `Hello 0x0514` y
+`ReadEeprom 0x051B`; no existe escritura EEPROM. El lanzador experimental
+`tools/start-qdock-pavilion-telemetry.sh` activa esta capacidad.
+
 ## Escucha serie física
 
 Antes de abrir `/dev/ttyUSB0` en una sesión nueva, comprobar que ninguna otra

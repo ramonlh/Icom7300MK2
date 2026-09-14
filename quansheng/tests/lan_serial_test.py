@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Shared serial acquisition over TCP. Opens only a newly allocated PTY."""
 import json
+import base64
 import os
 import pty
 import select
@@ -21,10 +22,12 @@ env = dict(os.environ, QDOCK_LAN_TOKEN=token)
 
 
 @contextmanager
-def server(device, seconds=10, capture=None, fail_writes=False):
+def server(device, seconds=10, capture=None, fail_writes=False, allow_eeprom=False):
     args = [exe, '--serial', device, '--seconds', str(seconds), '--port', '0']
     if capture is not None:
         args += ['--capture', str(capture)]
+    if allow_eeprom:
+        args += ['--allow-eeprom-query']
     def limit_file_writes():
         signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
     proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -60,6 +63,29 @@ def until(stream, kind):
         if message['message'] == kind:
             return message
     raise AssertionError('message not received: ' + kind)
+
+
+XOR_KEY = bytes.fromhex('16 6c 14 e6 2e 91 0d 40 21 35 d5 40 13 03 e9 80')
+
+
+def radio_reply(payload):
+    encoded = bytes(value ^ XOR_KEY[index % 16] for index, value in enumerate(payload))
+    crc_at = len(payload)
+    return (b'\xab\xcd' + len(payload).to_bytes(2, 'little') + encoded
+            + bytes((0xff ^ XOR_KEY[crc_at % 16],
+                     0xff ^ XOR_KEY[(crc_at + 1) % 16])) + b'\xdc\xba')
+
+
+def read_serial_frame(master):
+    data = bytearray()
+    deadline = time.monotonic() + 2
+    while len(data) < 4 or len(data) < int.from_bytes(data[2:4], 'little') + 8:
+        assert time.monotonic() < deadline, 'serial request timeout'
+        if select.select([master], [], [], 0.1)[0]:
+            data.extend(os.read(master, 4096))
+    size = int.from_bytes(data[2:4], 'little')
+    payload = bytes(data[4 + i] ^ XOR_KEY[i % 16] for i in range(size))
+    return payload
 
 
 master, slave = pty.openpty()
@@ -122,6 +148,50 @@ try:
             assert last_stats['pending'] == '2' and last_stats['events'] == '0'
             assert proc.poll() is None
             assert not select.select([master], [], [], 0)[0], 'unexpected serial output'
+finally:
+    os.close(master)
+    os.close(slave)
+
+# Explicitly enabled EEPROM reads use Hello + 64 ReadEeprom blocks and never write EEPROM.
+master, slave = pty.openpty()
+try:
+    with server(os.ttyname(slave), seconds=10, allow_eeprom=True) as (_, port):
+        with client(port) as (sock, stream, status):
+            assert status['status'] == 'listening'
+            sock.sendall(b'{"message":"read_eeprom"}\n')
+            hello = read_serial_frame(master)
+            assert hello == bytes.fromhex('14 05 04 00 78 56 34 12')
+            os.write(master, radio_reply(bytes.fromhex('15 05 04 00 54 45 53 54')))
+            expected = bytearray()
+            for offset in range(0, 0x2000, 128):
+                request = read_serial_frame(master)
+                assert request[:4] == bytes.fromhex('1b 05 08 00')
+                assert int.from_bytes(request[4:6], 'little') == offset
+                assert request[6:8] == bytes((128, 0))
+                assert request[8:12] == bytes.fromhex('78 56 34 12')
+                block = bytes((offset // 128 + index) & 0xff for index in range(128))
+                expected.extend(block)
+                payload = (bytes.fromhex('1c 05') + (132).to_bytes(2, 'little')
+                           + offset.to_bytes(2, 'little') + bytes((128, 0)) + block)
+                os.write(master, radio_reply(payload))
+            dump = None
+            complete = None
+            for _ in range(160):
+                message = json.loads(stream.readline())
+                if message['message'] == 'eeprom_dump':
+                    dump = message
+                if message['message'] == 'eeprom_status' and message['status'] == 'complete':
+                    complete = message
+                    break
+            assert dump is not None and base64.b64decode(dump['dataBase64']) == expected
+            assert dump['size'] == 0x2000 and complete['bytesRead'] == 0x2000
+            assert len(dump['channels']) == 200
+            sections = {row['section'] for row in dump['settings']}
+            assert {'VFO y bandas', 'Radio FM', 'Ajustes generales', 'DTMF',
+                    'Contactos DTMF', 'Calibración'} <= sections
+            assert any(row['field'] == 'Clave AES personalizada'
+                       and row['detail'] == 'Valor oculto' for row in dump['settings'])
+            assert not select.select([master], [], [], 0)[0], 'unexpected extra serial output'
 finally:
     os.close(master)
     os.close(slave)

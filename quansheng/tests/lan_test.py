@@ -51,6 +51,7 @@ with tempfile.TemporaryDirectory() as directory:
             assert receive(stream)['message'] == 'pong'
             started = receive(stream)
             events = []
+            display_states = []
             while True:
                 message = receive(stream)
                 assert message['session'] == started['session']
@@ -58,6 +59,8 @@ with tempfile.TemporaryDirectory() as directory:
                     assert message['source'] == 'replay' and message['quality'] == 'candidate'
                     assert message['sequence'] == str(len(events) + 1)
                     events.append(message['event'])
+                if message['message'] == 'display_state':
+                    display_states.append(message)
                 if message['message'] == 'stats':
                     assert message['bytes'] == '16968' and message['pending'] == '0'
                 if message.get('status') == 'ended':
@@ -66,6 +69,13 @@ with tempfile.TemporaryDirectory() as directory:
                                       capture_output=True, text=True, check=True)
             assert events == [json.loads(line) for line in baseline.stdout.splitlines()]
             assert len(events) == 286
+            # Updates are incremental; slower systems may deliver the active
+            # marker and both completed VFO values in different snapshots.
+            assert any(state['activeVfo'] == 'A' for state in display_states)
+            assert any(state['vfoA']['frequencyText'] == '145.67500'
+                       for state in display_states)
+            assert any(state['vfoB']['frequencyText'] == '110.93750'
+                       for state in display_states)
             # Preserve the documented false positive, explicitly as a candidate.
             assert any(e.get('type') == 0 and e.get('field') == 181 for e in events)
 

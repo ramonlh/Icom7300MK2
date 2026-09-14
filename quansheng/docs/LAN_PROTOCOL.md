@@ -54,7 +54,9 @@ Cliente inicia con:
 
 Servidor responde `welcome` con `protocol`, `source: "replay"` y capacidades
 `serialAvailable`, `txControlAvailable`, `radioControlAvailable` y
-`normalizedStateAvailable`, todas `false`. Esto no describe el estado físico TX.
+`normalizedStateAvailable` y `eepromReadAvailable`. Esta última solo es true con
+fuente serie iniciada mediante `--allow-eeprom-query`; las capacidades de control
+y TX permanecen false. Esto no describe el estado físico TX.
 
 Tras `{"message":"subscribe"}`, el servidor envía:
 
@@ -62,6 +64,14 @@ Tras `{"message":"subscribe"}`, el servidor envía:
 2. Cero o más `event`, en orden.
 3. `stats`: bytes, eventos, descartados y pendientes del parser.
 4. `source_status` con la misma sesión y estado `ended`.
+
+Entre los eventos puede emitir `display_state`, siempre con `source` y la misma
+`session`. Contiene `activeVfo` (`A`, `B` o vacío) y objetos `vfoA`/`vfoB` con
+`frequencyText`, `memory`, `name`, `mode`, `power` y `selected`. Es un modelo
+observable de la pantalla, no una consulta interna a la radio. Reconstruye los
+fragmentos de frecuencia conocidos y descarta textos no imprimibles. El objeto
+`indicators` añade señal cruda, porcentaje de batería derivado, paso, tono
+observado, último DTMF y banderas de estado. Ningún campo habilita control.
 
 La conexión permanece abierta después de `ended`; otra suscripción en la misma
 conexión se rechaza. Una conexión nueva obtiene nueva sesión y replay desde cero.
@@ -82,6 +92,19 @@ y `pending`. Un final con pendientes no es un replay completo de todas las trama
 
 Después de autenticarse puede enviarse `{"message":"ping"}` para recibir
 `{"message":"pong"}`. Ese intercambio prueba el servicio LAN, no una radio.
+
+Con `eepromReadAvailable: true`, un cliente ya suscrito puede enviar
+`{"message":"read_eeprom"}`. El servidor inicia `Hello 0x0514` y encadena
+lecturas `0x051B` de 128 bytes hasta completar `0x0000-0x1FFF`. Publica
+`eeprom_status` con progreso y finalmente `eeprom_dump`, cuyo `dataBase64`
+contiene exactamente 8192 bytes. La lectura puede apagar temporalmente la
+iluminación de la radio. No existe mensaje ni constructor de escritura EEPROM.
+El mensaje incluye además `channels`, una tabla de 200 filas interpretada a partir
+de los registros de canal `channel*16`, nombres en `0x0F50` y atributos en
+`0x0D60`. `settings` agrupa VFO, FM, ajustes, mensajes, DTMF, escaneo,
+contactos y calibraciones. Contraseña, clave AES y códigos kill/revive no se
+transportan en claro; solo se indica si existen. Los valores no reconocidos se
+etiquetan como pendientes y las calibraciones sin unidad confirmada permanecen brutas.
 
 Errores: `{"message":"error","code":"..."}`, seguido de cierre. Códigos:
 `invalid_json`, `message_too_large`, `protocol_mismatch`, `unauthorized`,

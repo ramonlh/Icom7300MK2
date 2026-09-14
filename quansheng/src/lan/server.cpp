@@ -113,9 +113,15 @@ private:
                               << "host=" + (socket_->peerName().isEmpty()
                                                  ? QStringLiteral("(sin-nombre)")
                                                  : socket_->peerName());
+            bool eepromReadAvailable = false;
+#ifdef QDOCK_SERIAL
+            if (auto* serial = qobject_cast<SerialSource*>(source_))
+                eepromReadAvailable = serial->eepromReadAvailable();
+#endif
             send({{"message", "welcome"}, {"protocol", "qdock-lan/1"},
                   {"source", source_ ? "serial" : "replay"}, {"serialAvailable", source_ != nullptr},
                   {"txControlAvailable", false}, {"radioControlAvailable", false},
+                  {"eepromReadAvailable", eepromReadAvailable},
                   {"normalizedStateAvailable", false}});
         } else if (message == "ping") {
             send({{"message", "pong"}});
@@ -127,6 +133,7 @@ private:
                     if (!closing_) send(object);
                 });
                 send(serial->snapshot());
+                send(serial->displaySnapshot());
                 return;
             }
 #endif
@@ -136,6 +143,16 @@ private:
             send({{"message", "source_status"}, {"source", "replay"},
                   {"session", session_}, {"status", "replaying"}});
             timer_.start(10);
+        } else if (message == "read_eeprom") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            if (!started_ || !serial) { fail("eeprom_read_unavailable"); return; }
+            const QString error = serial->requestEepromRead();
+            if (!error.isEmpty())
+                send({{"message", "eeprom_status"}, {"status", "error"}, {"error", error}});
+#else
+            fail("eeprom_read_unavailable");
+#endif
         } else {
             // Includes PTT, EEPROM, raw-write and every non-whitelisted control.
             fail("unsupported_message");
@@ -153,6 +170,12 @@ private:
                        {"observedAt", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
                        {"quality", "candidate"}, {"decoder", "qdock-probe/0.1.0"},
                        {"event", qdock::eventJson(event)}})) return;
+            if (displayModel_.apply(event)) {
+                auto state = qdock::displayStateJson(displayModel_);
+                state.insert("source", "replay");
+                state.insert("session", session_);
+                if (!send(state)) return;
+            }
         }
         if (input_.atEnd()) {
             timer_.stop();
@@ -173,6 +196,7 @@ private:
     QObject* source_;
     QTimer timer_;
     qdock::Parser parser_;
+    qdock::DisplayModel displayModel_;
     QString session_;
     qint64 totalBytes_ = 0;
     quint64 sequence_ = 0;
@@ -184,11 +208,14 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     app.setApplicationName("qdock-server");
     QCommandLineParser cli;
-    cli.setApplicationDescription("Servidor Quansheng de observación READ-ONLY; sin control de radio.");
+    cli.setApplicationDescription("Servidor Quansheng pasivo; consulta RSSI opcional y explícita.");
     cli.addHelpOption();
     cli.addOptions({{"replay", "Captura binaria regular, nunca un dispositivo.", "archivo"},
                     {"serial", "Puerto serie autorizado para escucha READ-ONLY.", "dispositivo"},
                     {"capture", "Captura cruda en archivo nuevo del servidor; requiere --serial.", "archivo"},
+                    {"allow-rssi-query", "EXPERIMENTAL: permite únicamente GetRssi 0x0527 cada segundo."},
+                    {"allow-register-query", "EXPERIMENTAL: primera lectura de 50 registros a los 3,5 s; después cada 30 s. Frecuencia cada 2 s."},
+                    {"allow-eeprom-query", "EXPERIMENTAL: permite una lectura EEPROM completa solicitada por un cliente; nunca escribe."},
                     {"seconds", "Duración serie (1–86400); no hay reapertura automática.", "segundos", "15"},
                     {"listen", "Dirección IP local de escucha.", "ip", "127.0.0.1"},
                     {"port", "Puerto TCP (0 elige uno libre).", "puerto", "8765"}});
@@ -213,6 +240,12 @@ int main(int argc, char** argv) {
     if (cli.isSet("serial") && cli.value("serial").isEmpty()) return fail("Puerto serie vacío.");
     if (cli.isSet("capture") && (!cli.isSet("serial") || cli.value("capture").isEmpty()))
         return fail("--capture requiere --serial y un nombre de archivo nuevo.");
+    if (cli.isSet("allow-rssi-query") && !cli.isSet("serial"))
+        return fail("--allow-rssi-query requiere --serial.");
+    if (cli.isSet("allow-register-query") && !cli.isSet("serial"))
+        return fail("--allow-register-query requiere --serial.");
+    if (cli.isSet("allow-eeprom-query") && !cli.isSet("serial"))
+        return fail("--allow-eeprom-query requiere --serial.");
     qInfo().noquote() << "Compilación qdock-server:"
                       << QStringLiteral(QDOCK_BUILD_TIMESTAMP);
     QObject* source = nullptr;
@@ -249,7 +282,9 @@ int main(int argc, char** argv) {
     });
     signalTimer.start(100);
 #ifdef QDOCK_SERIAL
-    if (source) serial.start(cli.value("serial"), seconds, cli.value("capture"));
+    if (source) serial.start(cli.value("serial"), seconds, cli.value("capture"),
+                             cli.isSet("allow-rssi-query"), cli.isSet("allow-register-query"),
+                             cli.isSet("allow-eeprom-query"));
 #endif
     QTextStream(stdout) << QJsonDocument(QJsonObject{{"listening", address.toString()},
         {"port", server.serverPort()}, {"source", source ? "serial" : "replay"},

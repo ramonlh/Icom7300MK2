@@ -1352,6 +1352,62 @@ ApplicationWindow {
         return ""
     }
 
+    function formatQuanshengFrequency(text) {
+        if (!text)
+            return "—"
+        var parts = String(text).split(".")
+        if (parts.length !== 2)
+            return text
+        var fraction = parts[1]
+        while (fraction.length < 6)
+            fraction += "0"
+        fraction = fraction.substring(0, 6)
+        return parts[0] + "." + fraction.substring(0, 3)
+               + "." + fraction.substring(3, 6)
+    }
+
+    function quanshengFrequencyMain(text) {
+        var formatted = formatQuanshengFrequency(text)
+        return formatted.substring(0, formatted.length - 3)
+    }
+
+    function quanshengFrequencyHz(text) {
+        var formatted = formatQuanshengFrequency(text)
+        return formatted.substring(formatted.length - 3)
+    }
+
+    function quanshengRegistersClipboardText() {
+        var lines = ["Registro\tValor\tInterpretación"]
+        for (var i = 0; i < quanshengClient.hardwareRegisterRows.length; ++i) {
+            var row = quanshengClient.hardwareRegisterRows[i]
+            lines.push((row.register || "—") + "\t"
+                       + (row.value || "—") + "\t"
+                       + (row.interpretation || "—"))
+        }
+        return lines.join("\n")
+    }
+
+    function quanshengUserSettingRows() {
+        var rows = []
+        for (var i = 0; i < quanshengClient.eepromSettingRows.length; ++i) {
+            var row = quanshengClient.eepromSettingRows[i]
+            var address = parseInt(String(row.address).substring(2), 16)
+            if (address >= 0x0e70 && address <= 0x0f47)
+                rows.push(row)
+        }
+        return rows
+    }
+
+    function quanshengUserSettingValue(address) {
+        var wanted = String(address).toUpperCase()
+        for (var i = 0; i < quanshengClient.eepromSettingRows.length; ++i) {
+            var row = quanshengClient.eepromSettingRows[i]
+            if (String(row.address).toUpperCase() === wanted)
+                return row.value || "—"
+        }
+        return "—"
+    }
+
     // Estado del UV-K5. PTT permanece bloqueado; la frecuencia RX solo se
     // habilita cuando el servidor se inició con autorización explícita.
     Button {
@@ -1377,7 +1433,7 @@ ApplicationWindow {
     Popup {
         id: quanshengPopup
         width: 640
-        height: 500
+        height: Math.min(650, window.height - 32)
         x: Math.max(8, window.width - width - 16)
         y: Math.max(8, window.height - height - 52)
         modal: false
@@ -1395,23 +1451,15 @@ ApplicationWindow {
             anchors.fill: parent
             spacing: 7
 
-            Label {
-                text: "QUANSHENG UV-K5 · LAN"
-                color: "#ffffff"
-                font.bold: true
-                font.pixelSize: 14
-                Layout.fillWidth: true
-            }
-
-            Label {
-                text: "Observación pasiva · frecuencia y TX/PTT deshabilitados"
-                color: "#9da8ad"
-                font.pixelSize: 10
-                Layout.fillWidth: true
-            }
-
             RowLayout {
                 Layout.fillWidth: true
+                Label {
+                    text: "QUANSHENG UV-K5 · LAN"
+                    color: "#ffffff"
+                    font.bold: true
+                    font.pixelSize: 14
+                    Layout.fillWidth: true
+                }
                 Button {
                     text: quanshengClient.connected ? "Desconectar" : "Conectar"
                     onClicked: quanshengClient.connected
@@ -1422,7 +1470,6 @@ ApplicationWindow {
                     text: quanshengClient.sourceStatus
                     color: quanshengClient.connected ? "#8fdb9b" : "#e5c07b"
                     elide: Text.ElideRight
-                    Layout.fillWidth: true
                 }
             }
 
@@ -1434,18 +1481,38 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 96
                     color: "#202629"
-                    border.color: "#506069"
+                    border.color: quanshengClient.activeVfo === "A" ? "#69c98b" : "#506069"
+                    border.width: quanshengClient.activeVfo === "A" ? 2 : 1
                     radius: 5
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 10
                         spacing: 4
-                        Label { text: "VFO A · " + (quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M") ? "Memoria" : "VFO"); color: "#8fd3ed"; font.bold: true }
-                        Label { text: quanshengClient.vfoAFrequencyText !== "" ? quanshengClient.vfoAFrequencyText + " MHz" : "—"; color: "#ffffff"; font.pixelSize: 22; font.bold: true }
+                        Label { text: "VFO A" + (quanshengClient.activeVfo === "A" ? " · ACTIVO" : "") + " · " + (quanshengClient.vfoAMemory.startsWith("M") ? "Memoria" : "VFO"); color: quanshengClient.activeVfo === "A" ? "#8fdb9b" : "#8fd3ed"; font.bold: true }
+                        RowLayout {
+                            spacing: 0
+                            Label { text: quanshengClient.vfoAFrequencyText !== "" ? quanshengFrequencyMain(quanshengClient.vfoAFrequencyText) : "—"; color: "#ffffff"; font.pixelSize: 22; font.bold: true }
+                            Label { visible: quanshengClient.vfoAFrequencyText !== ""; text: quanshengFrequencyHz(quanshengClient.vfoAFrequencyText); color: "#9fb4be"; font.pixelSize: 16; font.bold: true; Layout.alignment: Qt.AlignBaseline }
+                            Label { visible: quanshengClient.vfoAFrequencyText !== ""; text: " MHz"; color: "#ffffff"; font.pixelSize: 14; font.bold: true; Layout.alignment: Qt.AlignBaseline }
+                        }
                         Label { visible: quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M"); text: "Canal / nombre"; color: "#83949d"; font.pixelSize: 9 }
                         Label { visible: quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M"); text: (quanshengClient.vfoAMemory || "—") + " · " + (quanshengClient.vfoAName || "sin nombre"); color: "#d6dadd"; elide: Text.ElideRight; Layout.fillWidth: true }
-                        Label { text: "Modo / potencia TX"; color: "#83949d"; font.pixelSize: 9 }
-                        Label { text: (quanshengClient.vfoAMode || "pendiente") + " · " + (quanshengClient.vfoAPower || "pendiente"); color: "#aeb9be"; elide: Text.ElideRight; Layout.fillWidth: true }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 20
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 1
+                                Label { text: "Modo"; color: "#83949d"; font.pixelSize: 9 }
+                                Label { text: quanshengClient.vfoAMode || "pendiente"; color: "#aeb9be"; elide: Text.ElideRight; Layout.fillWidth: true }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 1
+                                Label { text: "Potencia TX"; color: "#83949d"; font.pixelSize: 9 }
+                                Label { text: quanshengClient.vfoAPower === "H" ? "High" : quanshengClient.vfoAPower === "M" ? "Med" : quanshengClient.vfoAPower === "L" ? "Low" : (quanshengClient.vfoAPower || "pendiente"); color: "#aeb9be"; elide: Text.ElideRight; Layout.fillWidth: true }
+                            }
+                        }
                     }
                 }
 
@@ -1453,20 +1520,48 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 96
                     color: "#202629"
-                    border.color: "#506069"
+                    border.color: quanshengClient.activeVfo === "B" ? "#69c98b" : "#506069"
+                    border.width: quanshengClient.activeVfo === "B" ? 2 : 1
                     radius: 5
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 10
                         spacing: 4
-                        Label { text: "VFO B · " + (quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M") ? "Memoria" : "VFO"); color: "#8fd3ed"; font.bold: true }
-                        Label { text: quanshengClient.vfoBFrequencyText !== "" ? quanshengClient.vfoBFrequencyText + " MHz" : "—"; color: "#ffffff"; font.pixelSize: 22; font.bold: true }
+                        Label { text: "VFO B" + (quanshengClient.activeVfo === "B" ? " · ACTIVO" : "") + " · " + (quanshengClient.vfoBMemory.startsWith("M") ? "Memoria" : "VFO"); color: quanshengClient.activeVfo === "B" ? "#8fdb9b" : "#8fd3ed"; font.bold: true }
+                        RowLayout {
+                            spacing: 0
+                            Label { text: quanshengClient.vfoBFrequencyText !== "" ? quanshengFrequencyMain(quanshengClient.vfoBFrequencyText) : "—"; color: "#ffffff"; font.pixelSize: 22; font.bold: true }
+                            Label { visible: quanshengClient.vfoBFrequencyText !== ""; text: quanshengFrequencyHz(quanshengClient.vfoBFrequencyText); color: "#9fb4be"; font.pixelSize: 16; font.bold: true; Layout.alignment: Qt.AlignBaseline }
+                            Label { visible: quanshengClient.vfoBFrequencyText !== ""; text: " MHz"; color: "#ffffff"; font.pixelSize: 14; font.bold: true; Layout.alignment: Qt.AlignBaseline }
+                        }
                         Label { visible: quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M"); text: "Canal / función"; color: "#83949d"; font.pixelSize: 9 }
                         Label { visible: quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M"); text: (quanshengClient.vfoBMemory || "—") + " · " + (quanshengClient.vfoBName || "sin nombre"); color: "#d6dadd"; elide: Text.ElideRight; Layout.fillWidth: true }
-                        Label { text: "Modo / potencia TX"; color: "#83949d"; font.pixelSize: 9 }
-                        Label { text: (quanshengClient.vfoBMode || "pendiente") + " · " + (quanshengClient.vfoBPower || "pendiente"); color: "#aeb9be"; elide: Text.ElideRight; Layout.fillWidth: true }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 20
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 1
+                                Label { text: "Modo"; color: "#83949d"; font.pixelSize: 9 }
+                                Label { text: quanshengClient.vfoBMode || "pendiente"; color: "#aeb9be"; elide: Text.ElideRight; Layout.fillWidth: true }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 1
+                                Label { text: "Potencia TX"; color: "#83949d"; font.pixelSize: 9 }
+                                Label { text: quanshengClient.vfoBPower === "H" ? "High" : quanshengClient.vfoBPower === "M" ? "Med" : quanshengClient.vfoBPower === "L" ? "Low" : (quanshengClient.vfoBPower || "pendiente"); color: "#aeb9be"; elide: Text.ElideRight; Layout.fillWidth: true }
+                            }
+                        }
                     }
                 }
+            }
+
+            Label {
+                text: "ESTADO Y RECEPCIÓN"
+                color: "#8fd3ed"
+                font.pixelSize: 10
+                font.bold: true
+                Layout.fillWidth: true
             }
 
             GridLayout {
@@ -1475,7 +1570,7 @@ ApplicationWindow {
                 columnSpacing: 8
                 rowSpacing: 3
                 Label { text: "Batería"; color: "#aeb9be" }
-                Label { text: quanshengClient.batteryVolts > 0 ? Number(quanshengClient.batteryVolts).toFixed(2) + " V" : "—"; color: "#ffffff" }
+                Label { text: quanshengClient.batteryVolts > 0 ? Number(quanshengClient.batteryVolts).toFixed(2) + " V" + (quanshengClient.batteryPercent >= 0 ? " · " + quanshengClient.batteryPercent + "%" : "") : "—"; color: "#ffffff" }
                 Label { text: "Estado"; color: "#aeb9be" }
                 Label {
                     text: quanshengClient.candidateState || "—"
@@ -1485,6 +1580,79 @@ ApplicationWindow {
                 Label { text: String(quanshengClient.eventCount); color: "#ffffff" }
                 Label { text: "TX/PTT"; color: "#aeb9be" }
                 Label { text: "deshabilitado"; color: "#e06c75" }
+                Label { text: "Señal"; color: "#aeb9be" }
+                RowLayout {
+                    Layout.minimumWidth: 190
+                    Layout.preferredWidth: 190
+                    Layout.maximumWidth: 190
+                    spacing: 7
+                    Label {
+                        Layout.minimumWidth: 88
+                        Layout.preferredWidth: 88
+                        Layout.maximumWidth: 88
+                        text: quanshengClient.candidateState === "RX"
+                              && quanshengClient.signalLevel >= 0
+                              ? "S" + quanshengClient.signalLevel
+                                + (quanshengClient.signalOver > 0
+                                   ? " +" + (quanshengClient.signalOver * 10)
+                                   : "") + " aprox."
+                              : "—"
+                        color: "#ffffff"
+                    }
+                    Row {
+                        spacing: 2
+                        Repeater {
+                            model: 13
+                            Rectangle {
+                                required property int index
+                                width: 5
+                                height: 12
+                                radius: 1
+                                color: quanshengClient.candidateState === "RX"
+                                       && quanshengClient.signalLevel >= 0
+                                       && index < Math.min(13, quanshengClient.signalLevel
+                                                          + quanshengClient.signalOver)
+                                       ? (index < 9 ? "#4f8060" : "#b8dfc2")
+                                       : "#3b4448"
+                            }
+                        }
+                    }
+                }
+                Label { text: "Paso"; color: "#aeb9be" }
+                Label { text: quanshengClient.stepText || "—"; color: "#ffffff" }
+                Label { text: "Indicadores"; color: "#aeb9be" }
+                Label { text: quanshengClient.indicatorsText || "—"; color: "#ffffff"; elide: Text.ElideRight }
+                Label { text: "Tono / DTMF"; color: "#aeb9be" }
+                Label { text: (quanshengClient.toneIndicator || "—") + (quanshengClient.lastDtmf ? " · último " + quanshengClient.lastDtmf : ""); color: "#ffffff" }
+            }
+
+            Label {
+                text: "CONFIGURACIÓN OBSERVADA"
+                color: "#8fd3ed"
+                font.pixelSize: 10
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            GridLayout {
+                columns: 4
+                Layout.fillWidth: true
+                columnSpacing: 8
+                rowSpacing: 3
+                Label { text: "Funciones"; color: "#aeb9be" }
+                Label { text: quanshengClient.hardwareFunctionsText || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
+                Label { text: "Escáner"; color: "#aeb9be" }
+                Label { text: quanshengClient.hardwareScanText || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
+                Label { text: "Filtro RX"; color: "#aeb9be" }
+                Label { text: quanshengClient.hardwareFilterText || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
+                Label { text: "Squelch"; color: "#aeb9be" }
+                Label { text: quanshengClient.hardwareSquelchText || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
+                Label { text: "CTCSS/CDCSS"; color: "#aeb9be" }
+                Label { text: quanshengClient.hardwareCssText || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
+                Label { text: "DTMF/SelCall"; color: "#aeb9be" }
+                Label { text: quanshengClient.hardwareDtmfText || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
+                Label { text: "Generadores tono"; color: "#aeb9be" }
+                Label { text: quanshengClient.hardwareTonesText || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
             }
 
             Label {
@@ -1494,10 +1662,418 @@ ApplicationWindow {
                 Layout.fillWidth: true
             }
 
-            Button {
-                text: "Reiniciar contadores"
-                onClicked: quanshengClient.resetCounters()
-                Layout.alignment: Qt.AlignRight
+            Label {
+                text: "Observación pasiva · frecuencia y TX/PTT deshabilitados"
+                color: "#9da8ad"
+                font.pixelSize: 10
+                Layout.fillWidth: true
+            }
+
+            Label {
+                text: "MEDICIONES DE RECEPCIÓN"
+                color: "#8fd3ed"
+                font.pixelSize: 10
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: "RSSI  " + (quanshengClient.rssiRaw >= 0 ? quanshengClient.rssiDbmUncorrected + " dBm (raw " + quanshengClient.rssiRaw + ")" : "—"); color: "#ffffff" }
+                Label { text: "Ruido / glitch  " + (quanshengClient.rssiNoise >= 0 ? quanshengClient.rssiNoise + " / " + quanshengClient.rssiGlitch : "—"); color: "#ffffff" }
+                Label { text: "Frecuencia interna  " + (quanshengClient.hardwareFrequencyText || "—"); color: "#ffffff"; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: registerPopup.visible ? "Cerrar registros" : "Registros BK4819…"
+                    onClicked: registerPopup.visible ? registerPopup.close() : registerPopup.open()
+                }
+                Button {
+                    text: "Leer EEPROM…"
+                    enabled: quanshengClient.connected && quanshengClient.eepromReadAvailable
+                    onClicked: eepromPopup.open()
+                    ToolTip.visible: hovered && !enabled
+                    ToolTip.text: "Arranca qdock-server con --allow-eeprom-query"
+                }
+                Button {
+                    text: "Reiniciar contadores"
+                    onClicked: quanshengClient.resetCounters()
+                }
+            }
+
+            Label {
+                text: "VALORES DE USUARIO EEPROM · SOLO LECTURA"
+                color: "#8fd3ed"
+                font.pixelSize: 10
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            GridLayout {
+                columns: 4
+                Layout.fillWidth: true
+                columnSpacing: 8
+                rowSpacing: 3
+                Label { text: "Canal llamada 0x0E70"; color: "#aeb9be" }
+                Label { text: quanshengUserSettingValue("0x0E70"); color: "#ffffff" }
+                Label { text: "Squelch 0x0E71"; color: "#aeb9be" }
+                Label { text: quanshengUserSettingValue("0x0E71"); color: "#ffffff" }
+                Label { text: "Visualización 0x0E79"; color: "#aeb9be" }
+                Label { text: quanshengUserSettingValue("0x0E79"); color: "#ffffff" }
+                Label { text: "Cross-band 0x0E7A"; color: "#aeb9be" }
+                Label { text: quanshengUserSettingValue("0x0E7A"); color: "#ffffff" }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    text: quanshengClient.eepromSettingRows.length
+                          ? quanshengUserSettingRows().length + " opciones de usuario leídas"
+                          : "Lee primero la EEPROM para cargar los valores"
+                    color: "#9da8ad"
+                    Layout.fillWidth: true
+                }
+                Button {
+                    text: "Todas las opciones…"
+                    enabled: quanshengClient.eepromSettingRows.length > 0
+                    onClicked: quanshengUserSettingsPopup.open()
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: quanshengUserSettingsPopup
+        width: Math.min(760, window.width - 32)
+        height: Math.min(620, window.height - 32)
+        x: Math.max(8, (window.width - width) / 2)
+        y: Math.max(8, (window.height - height) / 2)
+        modal: false
+        focus: true
+        padding: 12
+        closePolicy: Popup.CloseOnEscape
+        background: Rectangle { color: "#292d30"; border.color: "#7f8a91"; radius: 4 }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: "VALORES DE USUARIO EEPROM 0x0E70–0x0F47"; color: "#ffffff"; font.bold: true; Layout.fillWidth: true }
+                Button { text: "Cerrar"; onClicked: quanshengUserSettingsPopup.close() }
+            }
+            Label { text: "Lectura actual; preparados para futuros controles de edición. La escritura EEPROM continúa deshabilitada."; color: "#d2b36f"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: 1
+                model: quanshengUserSettingRows()
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOn }
+                delegate: Rectangle {
+                    required property var modelData
+                    required property int index
+                    width: ListView.view.width
+                    height: 29
+                    color: index % 2 ? "#252b2e" : "#22272a"
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 6
+                        Label { text: modelData.address; color: "#a9c3ce"; font.family: "monospace"; Layout.preferredWidth: 75 }
+                        Label { text: modelData.field; color: "#d8e0e4"; elide: Text.ElideRight; Layout.preferredWidth: 250 }
+                        Label { text: modelData.value || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
+                    }
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: eepromPopup
+        property int page: 0 // 0 canales, 1 otros datos, 2 hexadecimal
+        width: Math.min(860, window.width - 32)
+        height: Math.min(620, window.height - 32)
+        x: Math.max(8, (window.width - width) / 2)
+        y: Math.max(8, (window.height - height) / 2)
+        modal: false
+        focus: true
+        padding: 12
+        closePolicy: Popup.CloseOnEscape
+        background: Rectangle { color: "#292d30"; border.color: "#7f8a91"; radius: 4 }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: "EEPROM QUANSHENG UV-K5 · SOLO LECTURA"; color: "#ffffff"; font.bold: true; font.pixelSize: 14; Layout.fillWidth: true }
+                Button { text: quanshengClient.eepromBusy ? "Leyendo…" : "Leer EEPROM"; enabled: quanshengClient.eepromReadAvailable && !quanshengClient.eepromBusy; onClicked: quanshengClient.readEeprom() }
+                Button {
+                    text: "Copiar EEPROM"
+                    enabled: quanshengClient.eepromHexDump.length > 0
+                    onClicked: radioController.copyTextToClipboard(
+                                   quanshengClient.eepromHexDump,
+                                   "EEPROM Quansheng")
+                }
+                Button { text: "Cerrar"; onClicked: eepromPopup.close() }
+            }
+            Label { text: quanshengClient.eepromStatus; color: quanshengClient.eepromStatus.startsWith("Error") ? "#e06c75" : "#8fd3ed"; Layout.fillWidth: true }
+            Label { text: "La lectura inicia una sesión con la radio y puede apagar temporalmente su iluminación. No se escribe ningún byte en EEPROM."; color: "#d2b36f"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            RowLayout {
+                Button { text: "Canales"; checkable: true; checked: eepromPopup.page === 0; onClicked: eepromPopup.page = 0 }
+                Button { text: "Ajustes y calibración"; checkable: true; checked: eepromPopup.page === 1; onClicked: eepromPopup.page = 1 }
+                Button { text: "Hexadecimal"; checkable: true; checked: eepromPopup.page === 2; onClicked: eepromPopup.page = 2 }
+                Label { text: quanshengClient.eepromChannelRows.length ? (eepromPopup.page === 0 ? "200 canales · vacíos incluidos" : eepromPopup.page === 1 ? quanshengClient.eepromSettingRows.length + " datos interpretados" : "8192 bytes") : ""; color: "#9da8ad"; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+            }
+            Rectangle {
+                visible: eepromPopup.page === 0
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#202629"
+                border.color: "#465157"
+                radius: 3
+                Flickable {
+                    id: eepromTableFlick
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    clip: true
+                    contentWidth: 1450
+                    contentHeight: eepromTableColumn.implicitHeight
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOn }
+                    ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AlwaysOn }
+                    Column {
+                        id: eepromTableColumn
+                        width: 1450
+                        spacing: 1
+                        Row {
+                            spacing: 8
+                            Repeater {
+                                model: ["Canal", "Nombre", "RX MHz", "TX MHz", "Desplazamiento", "Modo", "Ancho", "Potencia", "Tono RX", "Tono TX", "Paso", "Escaneo", "Opciones"]
+                                Label {
+                                    required property var modelData
+                                    required property int index
+                                    width: [55,110,95,95,125,70,75,75,145,145,85,100,130][index]
+                                    text: modelData
+                                    color: "#91a6af"
+                                    font.bold: true
+                                    font.pixelSize: 11
+                                }
+                            }
+                        }
+                        Repeater {
+                            model: quanshengClient.eepromChannelRows
+                            Rectangle {
+                                required property var modelData
+                                required property int index
+                                width: 1450
+                                height: 24
+                                color: index % 2 ? "#252b2e" : "#22272a"
+                                Row {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: 8
+                                    property var values: modelData.empty
+                                        ? [String(modelData.channel).padStart(3, "0"), modelData.name || "—", "VACÍO", "—", "—", "—", "—", "—", "—", "—", "—", modelData.scan || "—", "—"]
+                                        : [String(modelData.channel).padStart(3, "0"), modelData.name || "—", modelData.rx, modelData.tx, modelData.offset, modelData.mode, modelData.bandwidth, modelData.power, modelData.rxTone, modelData.txTone, modelData.step, modelData.scan || "—", modelData.flags || "—"]
+                                    Repeater {
+                                        model: parent.values
+                                        Label {
+                                            required property var modelData
+                                            required property int index
+                                            width: [55,110,95,95,125,70,75,75,145,145,85,100,130][index]
+                                            text: modelData
+                                            color: index === 2 && modelData === "VACÍO" ? "#758087" : "#d8e0e4"
+                                            elide: Text.ElideRight
+                                            font.pixelSize: 11
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                visible: eepromPopup.page === 1
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#202629"
+                border.color: "#465157"
+                radius: 3
+                Flickable {
+                    id: eepromSettingsFlick
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    clip: true
+                    contentWidth: 1150
+                    contentHeight: eepromSettingsColumn.implicitHeight
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOn }
+                    ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AlwaysOn }
+                    Column {
+                        id: eepromSettingsColumn
+                        width: 1150
+                        spacing: 1
+                        Row {
+                            spacing: 8
+                            Repeater {
+                                model: ["Sección", "Dirección", "Dato", "Valor interpretado", "Observación"]
+                                Label {
+                                    required property var modelData
+                                    required property int index
+                                    width: [170,80,220,300,310][index]
+                                    text: modelData
+                                    color: "#91a6af"
+                                    font.bold: true
+                                    font.pixelSize: 11
+                                }
+                            }
+                        }
+                        Repeater {
+                            model: quanshengClient.eepromSettingRows
+                            Rectangle {
+                                required property var modelData
+                                required property int index
+                                width: 1150
+                                height: 25
+                                color: index % 2 ? "#252b2e" : "#22272a"
+                                Row {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: 8
+                                    property var values: [modelData.section, modelData.address, modelData.field, modelData.value || "—", modelData.detail || ""]
+                                    Repeater {
+                                        model: parent.values
+                                        Label {
+                                            required property var modelData
+                                            required property int index
+                                            width: [170,80,220,300,310][index]
+                                            text: modelData
+                                            color: index === 0 ? "#8fd3ed" : index === 1 ? "#a9c3ce" : "#d8e0e4"
+                                            font.family: index === 1 ? "monospace" : Qt.application.font.family
+                                            elide: Text.ElideRight
+                                            font.pixelSize: 11
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            TextArea {
+                visible: eepromPopup.page === 2
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                readOnly: true
+                selectByMouse: true
+                wrapMode: TextEdit.NoWrap
+                font.family: "monospace"
+                font.pixelSize: 12
+                color: "#d8e0e4"
+                text: quanshengClient.eepromHexDump || "Pulsa «Leer EEPROM» para obtener el volcado completo (0x0000–0x1FFF)."
+                background: Rectangle { color: "#202629"; border.color: "#465157"; radius: 3 }
+            }
+        }
+    }
+
+    Popup {
+        id: registerPopup
+        width: Math.min(900, window.width - 32)
+        height: Math.min(620, window.height - 32)
+        x: Math.max(8, (window.width - width) / 2)
+        y: Math.max(8, (window.height - height) / 2)
+        modal: false
+        focus: true
+        padding: 12
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            color: "#292d30"
+            border.color: "#7f8a91"
+            border.width: 1
+            radius: 4
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    text: "REGISTROS BK4819 · LECTURA Y DIAGNÓSTICO"
+                    color: "#ffffff"
+                    font.bold: true
+                    font.pixelSize: 14
+                    Layout.fillWidth: true
+                }
+                Label {
+                    text: quanshengClient.hardwareRegisterCount > 0
+                          ? quanshengClient.hardwareRegisterCount + " valores recibidos"
+                          : "Esperando primera lectura…"
+                    color: "#8fd3ed"
+                }
+                Button {
+                    text: "Copiar tabla"
+                    enabled: quanshengClient.hardwareRegisterRows.length > 0
+                    onClicked: radioController.copyTextToClipboard(
+                                   quanshengRegistersClipboardText(),
+                                   "Registros BK4819")
+                }
+                Button { text: "Cerrar"; onClicked: registerPopup.close() }
+            }
+            Label {
+                text: "Datos técnicos de sólo lectura · — indica que el registro todavía no se consulta"
+                color: "#9da8ad"
+                Layout.fillWidth: true
+            }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#22272a"
+                border.color: "#465157"
+                radius: 3
+                Flickable {
+                    id: registerFlick
+                    anchors.fill: parent
+                    anchors.margins: 7
+                    clip: true
+                    contentWidth: width
+                    contentHeight: registerColumns.implicitHeight
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOn }
+                    RowLayout {
+                        id: registerColumns
+                        width: registerFlick.width - 14
+                        spacing: 18
+                        Repeater {
+                            model: 2
+                            ColumnLayout {
+                                id: registerHalf
+                                required property int index
+                                property int firstRow: registerHalf.index * Math.ceil(quanshengClient.hardwareRegisterRows.length / 2)
+                                property int rowsHere: Math.min(Math.ceil(quanshengClient.hardwareRegisterRows.length / 2), quanshengClient.hardwareRegisterRows.length - registerHalf.firstRow)
+                                Layout.fillWidth: true
+                                spacing: 2
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: "Registro"; color: "#91a6af"; font.bold: true; font.pixelSize: 12; Layout.preferredWidth: 65 }
+                                    Label { text: "Valor"; color: "#91a6af"; font.bold: true; font.pixelSize: 12; Layout.preferredWidth: 72 }
+                                    Label { text: "Interpretación"; color: "#91a6af"; font.bold: true; font.pixelSize: 12; Layout.fillWidth: true }
+                                }
+                                Repeater {
+                                    model: registerHalf.rowsHere
+                                    RowLayout {
+                                        required property int index
+                                        property var rowData: quanshengClient.hardwareRegisterRows[registerHalf.firstRow + index]
+                                        Layout.fillWidth: true
+                                        Label { text: rowData ? rowData.register : "—"; color: "#a9c3ce"; font.family: "monospace"; font.pixelSize: 12; Layout.preferredWidth: 65 }
+                                        Label { text: rowData ? rowData.value : "—"; color: "#e0e5e7"; font.family: "monospace"; font.pixelSize: 12; Layout.preferredWidth: 72 }
+                                        Label { text: rowData ? rowData.interpretation : "—"; color: "#c8d0d4"; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

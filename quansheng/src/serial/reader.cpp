@@ -43,6 +43,9 @@ void listPorts() {
 bool openReadOnly(QSerialPort& port, const QString& name, QString& error) {
     return openConfigured(port, name, QIODevice::ReadOnly, error);
 }
+bool openRssiQuery(QSerialPort& port, const QString& name, QString& error) {
+    return openConfigured(port, name, QIODevice::ReadWrite, error);
+}
 
 int readSerial(const QString& name, int seconds,
                const std::function<bool(const QByteArray&)>& receive) {

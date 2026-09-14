@@ -3,14 +3,37 @@
 #include <QAbstractSocket>
 #include <QDateTime>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QDebug>
 #include <QSettings>
 #include <QTcpSocket>
 
+namespace {
+
+QVariantList emptyHardwareRegisterRows()
+{
+    QVariantList rows;
+    rows.reserve(0x80);
+    for (int address = 0; address <= 0x7f; ++address) {
+        rows.append(QVariantMap{
+            {QStringLiteral("register"),
+             QStringLiteral("0x%1").arg(QString::number(address, 16)
+                                             .rightJustified(2, QLatin1Char('0')).toUpper())},
+            {QStringLiteral("value"), QStringLiteral("—")},
+            {QStringLiteral("interpretation"),
+             QStringLiteral("No leído · interpretación pendiente")}});
+    }
+    return rows;
+}
+
+} // namespace
+
 QuanshengClient::QuanshengClient(QObject *parent)
     : QObject(parent), m_socket(new QTcpSocket(this))
 {
+    m_hardwareRegisterRows = emptyHardwareRegisterRows();
+
     QSettings settings;
     m_host = settings.value(QStringLiteral("quansheng/host"), m_host).toString();
     const int savedPort = settings.value(QStringLiteral("quansheng/port"), m_port).toInt();
@@ -127,7 +150,38 @@ void QuanshengClient::connectToServer()
     m_buffer.clear();
     m_sourceStatus = QStringLiteral("conectando");
     m_serialAvailable = false;
+    m_eepromReadAvailable = false;
+    m_eepromBusy = false;
     m_frequencyText.clear();
+    m_activeVfo.clear();
+    m_batteryPercent = -1;
+    m_signalLevel = -1;
+    m_signalOver = 0;
+    m_rssiRaw = -1;
+    m_rssiNoise = -1;
+    m_rssiGlitch = -1;
+    m_hardwareFrequencyText.clear();
+    m_hardwareRegisterCount = 0;
+    m_hardwareBlocksText.clear();
+    m_hardwareAgcText.clear();
+    m_hardwareAfcText.clear();
+    m_hardwareRegistersRawText.clear();
+    m_hardwareRegisterRows = emptyHardwareRegisterRows();
+    m_hardwareFunctionsText.clear();
+    m_hardwareGpioText.clear();
+    m_hardwareAudioText.clear();
+    m_hardwareRfAgcText.clear();
+    m_hardwareFilterText.clear();
+    m_hardwareSquelchText.clear();
+    m_hardwarePaText.clear();
+    m_hardwareCssText.clear();
+    m_hardwareTonesText.clear();
+    m_hardwareScanText.clear();
+    m_hardwareDtmfText.clear();
+    m_stepText.clear();
+    m_toneIndicator.clear();
+    m_indicatorsText.clear();
+    m_lastDtmf.clear();
     m_vfoAFrequencyText.clear();
     m_vfoBFrequencyText.clear();
     m_vfoAMemory.clear();
@@ -166,6 +220,8 @@ void QuanshengClient::disconnectFromServer()
         m_socket->disconnectFromHost();
     m_sourceStatus = QStringLiteral("desconectado");
     m_serialAvailable = false;
+    m_eepromReadAvailable = false;
+    m_eepromBusy = false;
     m_observationFresh = false;
     emit stateChanged();
 }
@@ -177,6 +233,19 @@ void QuanshengClient::resetCounters()
     m_discardedBytes = 0;
     m_pendingBytes = 0;
     emit countersChanged();
+}
+
+void QuanshengClient::readEeprom()
+{
+    if (!connected() || !m_eepromReadAvailable || m_eepromBusy)
+        return;
+    m_eepromBusy = true;
+    m_eepromStatus = QStringLiteral("Iniciando lectura…");
+    m_eepromHexDump.clear();
+    m_eepromChannelRows.clear();
+    m_eepromSettingRows.clear();
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("read_eeprom")}});
 }
 
 void QuanshengClient::onConnected()
@@ -255,6 +324,7 @@ void QuanshengClient::processLine(const QByteArray &line)
         qInfo() << "Quansheng LAN welcome recibido";
         m_serialAvailable = object.value(QStringLiteral("serialAvailable")).toBool();
         m_txControlAvailable = object.value(QStringLiteral("txControlAvailable")).toBool();
+        m_eepromReadAvailable = object.value(QStringLiteral("eepromReadAvailable")).toBool();
         m_sourceStatus = object.value(QStringLiteral("source")).toString();
         emit stateChanged();
         QJsonObject subscribe;
@@ -265,11 +335,52 @@ void QuanshengClient::processLine(const QByteArray &line)
         if (object.contains(QStringLiteral("error")))
             setError(object.value(QStringLiteral("error")).toString());
         emit stateChanged();
+    } else if (message == QStringLiteral("eeprom_status")) {
+        const QString status = object.value(QStringLiteral("status")).toString();
+        const int bytesRead = object.value(QStringLiteral("bytesRead")).toInt();
+        const int totalBytes = object.value(QStringLiteral("totalBytes")).toInt(0x2000);
+        m_eepromBusy = status == QStringLiteral("starting") || status == QStringLiteral("reading");
+        if (status == QStringLiteral("reading"))
+            m_eepromStatus = QStringLiteral("Leyendo: %1 / %2 bytes").arg(bytesRead).arg(totalBytes);
+        else if (status == QStringLiteral("complete"))
+            m_eepromStatus = QStringLiteral("Lectura completa: %1 bytes").arg(bytesRead);
+        else if (status == QStringLiteral("error"))
+            m_eepromStatus = QStringLiteral("Error: %1").arg(object.value(QStringLiteral("error")).toString());
+        else
+            m_eepromStatus = QStringLiteral("Iniciando sesión EEPROM…");
+        emit stateChanged();
+    } else if (message == QStringLiteral("eeprom_dump")) {
+        m_eepromChannelRows = object.value(QStringLiteral("channels")).toArray().toVariantList();
+        m_eepromSettingRows = object.value(QStringLiteral("settings")).toArray().toVariantList();
+        const QByteArray data = QByteArray::fromBase64(
+            object.value(QStringLiteral("dataBase64")).toString().toLatin1());
+        QStringList lines;
+        for (int offset = 0; offset < data.size(); offset += 16) {
+            const QByteArray block = data.mid(offset, 16);
+            QStringList bytes;
+            QString ascii;
+            for (char byte : block) {
+                const uchar value = static_cast<uchar>(byte);
+                bytes.append(QStringLiteral("%1").arg(value, 2, 16, QLatin1Char('0')).toUpper());
+                ascii.append(value >= 32 && value <= 126 ? QChar(value) : QChar('.'));
+            }
+            lines.append(QStringLiteral("%1  %2  |%3|")
+                         .arg(offset, 4, 16, QLatin1Char('0')).toUpper()
+                         .arg(bytes.join(QLatin1Char(' ')), -47)
+                         .arg(ascii));
+        }
+        m_eepromHexDump = lines.join(QLatin1Char('\n'));
+        emit stateChanged();
     } else if (message == QStringLiteral("event")) {
         const QJsonObject event = object.value(QStringLiteral("event")).toObject();
         ++m_eventCount;
-        if (event.contains(QStringLiteral("state")))
+        if (event.contains(QStringLiteral("state"))) {
             m_candidateState = event.value(QStringLiteral("state")).toString();
+            if (m_candidateState != QStringLiteral("RX")) {
+                m_signalLevel = -1;
+                m_signalOver = 0;
+            }
+        }
         if (event.contains(QStringLiteral("battery_volts")))
             m_batteryVolts = event.value(QStringLiteral("battery_volts")).toDouble();
         const QString text = event.value(QStringLiteral("text")).toString();
@@ -283,6 +394,9 @@ void QuanshengClient::processLine(const QByteArray &line)
         if (printableText && (event.value(QStringLiteral("type")).toInt() >= 1
                               && event.value(QStringLiteral("type")).toInt() <= 3))
             m_lastObservationText = text;
+        // Compatibility fallback for physical firmware layouts not yet covered
+        // by display_state. Normalized updates overwrite these candidates when
+        // the server can reconstruct the complete screen.
         bool frequencyOk = false;
         const double frequency = text.toDouble(&frequencyOk);
         const int type = event.value(QStringLiteral("type")).toInt(-1);
@@ -295,58 +409,35 @@ void QuanshengClient::processLine(const QByteArray &line)
         }
         const bool vfoA = lcdRow >= 1 && lcdRow <= 3;
         const bool vfoB = lcdRow >= 4;
-        if (frequencyOk && text.contains(QLatin1Char('.'))
-            && frequency >= 20.0 && frequency <= 1000.0) {
-            // A frequency is identified by its numeric LCD text and row. The
-            // firmware uses different UI packet types/fields for memory and
-            // VFO screens, so the row is the stable discriminator here.
-            if (vfoA) {
+        if (printableText && frequencyOk && text.contains(QLatin1Char('.'))
+            && frequency >= 18.0 && frequency <= 1300.0) {
+            if (vfoA)
                 m_vfoAFrequencyText = text;
-                if (type == 1 && field == 9)
-                    m_vfoAMemory = QStringLiteral("Memoria");
-                else if (type == 3 && field == 7)
-                    m_vfoAMemory = QStringLiteral("VFO");
-            } else if (vfoB) {
+            else if (vfoB)
                 m_vfoBFrequencyText = text;
-                if (type == 1 && field == 9)
-                    m_vfoBMemory = QStringLiteral("Memoria");
-                else if (type == 3 && field == 7)
-                    m_vfoBMemory = QStringLiteral("VFO");
-            }
             m_frequencyText = text;
         }
-        if (field == 2 && (text == QStringLiteral("AM")
-                           || text == QStringLiteral("FM")
-                           || text == QStringLiteral("NFM")
-                           || text == QStringLiteral("WFM")
-                           || text == QStringLiteral("USB")
-                           || text == QStringLiteral("LSB")
-                           || text == QStringLiteral("CW"))) {
-            if (vfoA)
-                m_vfoAMode = text;
-            else if (vfoB)
-                m_vfoBMode = text;
+        static const QStringList modes = {
+            QStringLiteral("AM"), QStringLiteral("FM"), QStringLiteral("NFM"),
+            QStringLiteral("WFM"), QStringLiteral("USB"), QStringLiteral("LSB"),
+            QStringLiteral("CW")};
+        if (printableText && field == 2 && modes.contains(text)) {
+            if (vfoA) m_vfoAMode = text;
+            else if (vfoB) m_vfoBMode = text;
         }
-        if (field == 2 && (text.startsWith(QLatin1Char('M'))
-                           || text.startsWith(QLatin1Char('F')))) {
-            if (vfoA)
-                m_vfoAMemory = text;
-            else if (vfoB)
-                m_vfoBMemory = text;
+        if (printableText && field == 2
+            && (text.startsWith(QLatin1Char('M')) || text.startsWith(QLatin1Char('F')))) {
+            if (vfoA) m_vfoAMemory = text;
+            else if (vfoB) m_vfoBMemory = text;
+        } else if (printableText && field == 7 && !frequencyOk) {
+            if (vfoA) m_vfoAName = text;
+            else if (vfoB) m_vfoBName = text;
         }
-        else if (field == 7 && !text.isEmpty() && !frequencyOk) {
-            if (vfoA)
-                m_vfoAName = text;
-            else if (vfoB)
-                m_vfoBName = text;
-        }
-        if (field == 1 && (text == QStringLiteral("H")
-                           || text == QStringLiteral("M")
-                           || text == QStringLiteral("L"))) {
-            if (vfoA)
-                m_vfoAPower = text;
-            else if (vfoB)
-                m_vfoBPower = text;
+        if (printableText && field == 1
+            && (text == QStringLiteral("H") || text == QStringLiteral("M")
+                || text == QStringLiteral("L"))) {
+            if (vfoA) m_vfoAPower = text;
+            else if (vfoB) m_vfoBPower = text;
         }
         m_lastObservationAt = object.value(QStringLiteral("observedAt")).toString();
         m_observationAgeSeconds = 0;
@@ -354,6 +445,322 @@ void QuanshengClient::processLine(const QByteArray &line)
         m_notificationPending = true;
         if (!m_notifyTimer.isActive())
             m_notifyTimer.start();
+    } else if (message == QStringLiteral("rssi_state")) {
+        m_rssiRaw = object.value(QStringLiteral("raw")).toInt(-1);
+        m_rssiDbmUncorrected = object.value(QStringLiteral("dbmUncorrected")).toInt();
+        m_rssiNoise = object.value(QStringLiteral("noise")).toInt(-1);
+        m_rssiGlitch = object.value(QStringLiteral("glitch")).toInt(-1);
+        emit stateChanged();
+    } else if (message == QStringLiteral("register_frequency_state")) {
+        const qulonglong frequencyHz = object.value(QStringLiteral("frequencyHz")).toString().toULongLong();
+        if (frequencyHz > 0) {
+            m_hardwareFrequencyText = QStringLiteral("%1.%2 MHz")
+                    .arg(frequencyHz / 1000000)
+                    .arg(frequencyHz % 1000000, 6, 10, QLatin1Char('0'));
+        }
+        emit stateChanged();
+    } else if (message == QStringLiteral("register_state")) {
+        const qulonglong frequencyHz = object.value(QStringLiteral("frequencyHz")).toString().toULongLong();
+        if (frequencyHz > 0) {
+            const qulonglong mhz = frequencyHz / 1000000;
+            const qulonglong remainder = frequencyHz % 1000000;
+            m_hardwareFrequencyText = QStringLiteral("%1.%2 MHz")
+                    .arg(mhz).arg(remainder, 6, 10, QLatin1Char('0'));
+        }
+        m_hardwareRegisterCount = object.value(QStringLiteral("values")).toObject().size();
+        const QJsonObject values = object.value(QStringLiteral("values")).toObject();
+        const QStringList registerNames{
+            QStringLiteral("07"), QStringLiteral("0B"), QStringLiteral("0C"),
+            QStringLiteral("10"), QStringLiteral("11"),
+            QStringLiteral("12"), QStringLiteral("13"), QStringLiteral("14"),
+            QStringLiteral("19"), QStringLiteral("21"), QStringLiteral("24"), QStringLiteral("28"),
+            QStringLiteral("29"), QStringLiteral("30"), QStringLiteral("31"),
+            QStringLiteral("32"), QStringLiteral("33"),
+            QStringLiteral("36"), QStringLiteral("37"), QStringLiteral("38"), QStringLiteral("39"),
+            QStringLiteral("43"), QStringLiteral("47"), QStringLiteral("48"), QStringLiteral("49"),
+            QStringLiteral("4D"), QStringLiteral("4E"), QStringLiteral("4F"), QStringLiteral("50"),
+            QStringLiteral("51"), QStringLiteral("52"), QStringLiteral("65"), QStringLiteral("67"),
+            QStringLiteral("68"), QStringLiteral("69"), QStringLiteral("6A"),
+            QStringLiteral("63"), QStringLiteral("64"), QStringLiteral("6F"),
+            QStringLiteral("70"), QStringLiteral("71"), QStringLiteral("72"),
+            QStringLiteral("73"), QStringLiteral("78"), QStringLiteral("7B"),
+            QStringLiteral("7C"), QStringLiteral("7D"), QStringLiteral("7E")};
+        QStringList rawRegisters;
+        for (const QString &name : registerNames) {
+            const QString value = QString::number(values.value(name).toInt(), 16)
+                    .rightJustified(4, QLatin1Char('0')).toUpper();
+            rawRegisters << name + QLatin1Char('=') + value;
+        }
+        m_hardwareRegistersRawText = rawRegisters.join(QStringLiteral("   "));
+        const QJsonObject functions = object.value(QStringLiteral("functions")).toObject();
+        QStringList enabledFunctions;
+        if (functions.value(QStringLiteral("vox")).toBool()) enabledFunctions << QStringLiteral("VOX");
+        if (functions.value(QStringLiteral("scrambler")).toBool()) enabledFunctions << QStringLiteral("scrambler");
+        if (functions.value(QStringLiteral("compander")).toBool()) enabledFunctions << QStringLiteral("compander");
+        m_hardwareFunctionsText = enabledFunctions.isEmpty() ? QStringLiteral("ninguna activa")
+                                                              : enabledFunctions.join(QStringLiteral(" · "));
+        const QJsonObject gpio = object.value(QStringLiteral("gpio")).toObject();
+        QStringList enabledGpio;
+        if (gpio.value(QStringLiteral("rxEnable")).toBool()) enabledGpio << QStringLiteral("RX");
+        if (gpio.value(QStringLiteral("paEnable")).toBool()) enabledGpio << QStringLiteral("PA");
+        if (gpio.value(QStringLiteral("uhfLna")).toBool()) enabledGpio << QStringLiteral("LNA UHF");
+        if (gpio.value(QStringLiteral("vhfLna")).toBool()) enabledGpio << QStringLiteral("LNA VHF");
+        if (gpio.value(QStringLiteral("redLed")).toBool()) enabledGpio << QStringLiteral("LED rojo");
+        if (gpio.value(QStringLiteral("greenLed")).toBool()) enabledGpio << QStringLiteral("LED verde");
+        m_hardwareGpioText = enabledGpio.isEmpty() ? QStringLiteral("ninguna línea activa")
+                                                   : enabledGpio.join(QStringLiteral(" · "));
+        const QJsonObject audio = object.value(QStringLiteral("audio")).toObject();
+        const QStringList audioOutputs{QStringLiteral("mute"), QStringLiteral("FM"), QStringLiteral("alarma"),
+            QStringLiteral("beep"), QStringLiteral("RAW"), QStringLiteral("USB"), QStringLiteral("CTCSS"),
+            QStringLiteral("AM"), QStringLiteral("FSK"), QStringLiteral("BYP")};
+        const int output = audio.value(QStringLiteral("output")).toInt();
+        const QString outputName = output >= 0 && output < audioOutputs.size()
+                ? audioOutputs.at(output) : QStringLiteral("ruta %1").arg(output);
+        m_hardwareAudioText = QStringLiteral("%1 · G1 %2 · G2 %3 · DAC %4")
+                .arg(outputName).arg(audio.value(QStringLiteral("gain1")).toInt())
+                .arg(audio.value(QStringLiteral("gain2")).toInt())
+                .arg(audio.value(QStringLiteral("dacGain")).toInt());
+        const QJsonObject rfAgc = object.value(QStringLiteral("rfAgc")).toObject();
+        const int loMode = rfAgc.value(QStringLiteral("loMode")).toInt();
+        m_hardwareRfAgcText = QStringLiteral("LO %1 · umbral alto %2 · bajo %3")
+                .arg(loMode < 2 ? QStringLiteral("auto") : loMode == 2 ? QStringLiteral("bajo") : QStringLiteral("alto"))
+                .arg(rfAgc.value(QStringLiteral("highThreshold")).toInt())
+                .arg(rfAgc.value(QStringLiteral("lowThreshold")).toInt());
+        const QJsonObject filter = object.value(QStringLiteral("filter")).toObject();
+        const QStringList rfWidths{QStringLiteral("1.70"), QStringLiteral("2.00"),
+            QStringLiteral("2.50"), QStringLiteral("3.00"), QStringLiteral("3.75"),
+            QStringLiteral("4.00"), QStringLiteral("4.25"), QStringLiteral("4.50")};
+        const int bandwidthMode = filter.value(QStringLiteral("bandwidthMode")).toInt();
+        const QString channelWidth = bandwidthMode == 0 ? QStringLiteral("12.5 kHz")
+                : bandwidthMode == 1 ? QStringLiteral("6.25 kHz")
+                : bandwidthMode == 2 ? QStringLiteral("25/20 kHz") : QStringLiteral("modo %1").arg(bandwidthMode);
+        const int rfIndex = filter.value(QStringLiteral("rf")).toInt();
+        const int weakIndex = filter.value(QStringLiteral("weakRf")).toInt();
+        const QString multiplier = filter.value(QStringLiteral("doubleRf")).toBool() ? QStringLiteral(" ×2") : QString();
+        m_hardwareFilterText = QStringLiteral("%1 · RF %2%3 kHz · débil %4%3 kHz")
+                .arg(channelWidth).arg(rfWidths.value(rfIndex)).arg(multiplier).arg(rfWidths.value(weakIndex));
+        const QJsonObject squelch = object.value(QStringLiteral("squelch")).toObject();
+        m_hardwareSquelchText = QStringLiteral("RSSI %1/%2 · ruido %3/%4 · glitch %5/%6 · retardo %7/%8")
+                .arg(squelch.value(QStringLiteral("openRssi")).toInt())
+                .arg(squelch.value(QStringLiteral("closeRssi")).toInt())
+                .arg(squelch.value(QStringLiteral("openNoise")).toInt())
+                .arg(squelch.value(QStringLiteral("closeNoise")).toInt())
+                .arg(squelch.value(QStringLiteral("openGlitch")).toInt())
+                .arg(squelch.value(QStringLiteral("closeGlitch")).toInt())
+                .arg(squelch.value(QStringLiteral("openDelay")).toInt())
+                .arg(squelch.value(QStringLiteral("closeDelay")).toInt());
+        const QJsonObject pa = object.value(QStringLiteral("pa")).toObject();
+        m_hardwarePaText = QStringLiteral("%1 · bias %2 · G1 %3 · G2 %4")
+                .arg(pa.value(QStringLiteral("enabled")).toBool() ? QStringLiteral("activo") : QStringLiteral("inactivo"))
+                .arg(pa.value(QStringLiteral("bias")).toInt())
+                .arg(pa.value(QStringLiteral("gain1")).toInt())
+                .arg(pa.value(QStringLiteral("gain2")).toInt());
+        const QJsonObject css = object.value(QStringLiteral("css")).toObject();
+        m_hardwareCssText = QStringLiteral("%1 · %2 · ganancia TX %3 · umbral %4/%5 · cola %6")
+                .arg(css.value(QStringLiteral("enabled")).toBool() ? QStringLiteral("activo") : QStringLiteral("inactivo"))
+                .arg(css.value(QStringLiteral("mode")).toString())
+                .arg(css.value(QStringLiteral("txGain")).toInt())
+                .arg(css.value(QStringLiteral("foundThreshold")).toInt())
+                .arg(css.value(QStringLiteral("lostThreshold")).toInt())
+                .arg(css.value(QStringLiteral("tailEnabled")).toBool() ? QString::number(css.value(QStringLiteral("tailMode")).toInt()) : QStringLiteral("no"));
+        const QJsonObject tones = object.value(QStringLiteral("tones")).toObject();
+        m_hardwareTonesText = QStringLiteral("Tone1 %1/%2 · Tone2 %3/%4")
+                .arg(tones.value(QStringLiteral("tone1Enabled")).toBool() ? QStringLiteral("activo") : QStringLiteral("off"))
+                .arg(tones.value(QStringLiteral("tone1Gain")).toInt())
+                .arg(tones.value(QStringLiteral("tone2Enabled")).toBool() ? QStringLiteral("activo") : QStringLiteral("off"))
+                .arg(tones.value(QStringLiteral("tone2Gain")).toInt());
+        const QJsonObject advanced = object.value(QStringLiteral("advanced")).toObject();
+        const QJsonObject blocks = object.value(QStringLiteral("blocks")).toObject();
+        QStringList activeBlocks;
+        if (blocks.value(QStringLiteral("rxDsp")).toBool()) activeBlocks << QStringLiteral("RX DSP");
+        if (blocks.value(QStringLiteral("txDsp")).toBool()) activeBlocks << QStringLiteral("TX DSP");
+        if (blocks.value(QStringLiteral("afDac")).toBool()) activeBlocks << QStringLiteral("AF");
+        if (blocks.value(QStringLiteral("discriminator")).toBool()) activeBlocks << QStringLiteral("DISC");
+        if (blocks.value(QStringLiteral("paGain")).toBool()) activeBlocks << QStringLiteral("PA");
+        if (blocks.value(QStringLiteral("micAdc")).toBool()) activeBlocks << QStringLiteral("MIC");
+        if (blocks.value(QStringLiteral("vcoCalibration")).toBool()) activeBlocks << QStringLiteral("VCO cal");
+        activeBlocks << QStringLiteral("RX link %1").arg(blocks.value(QStringLiteral("rxLink")).toInt());
+        activeBlocks << QStringLiteral("PLL %1").arg(blocks.value(QStringLiteral("pllVco")).toInt());
+        m_hardwareBlocksText = activeBlocks.join(QStringLiteral(" · "))
+                + QStringLiteral(" (0x%1)").arg(QString::number(values.value(QStringLiteral("30")).toInt(), 16).rightJustified(4, QLatin1Char('0')).toUpper());
+        const QJsonObject agc = object.value(QStringLiteral("agc")).toObject();
+        m_hardwareAgcText = QStringLiteral("%1 · índice %2 · nivel %3 · DC RX %4 / TX %5 (0x%6)")
+                .arg(agc.value(QStringLiteral("mode")).toString())
+                .arg(agc.value(QStringLiteral("gainIndex")).toInt())
+                .arg(agc.value(QStringLiteral("signalStrength")).toInt())
+                .arg(agc.value(QStringLiteral("rxDcFilter")).toInt())
+                .arg(agc.value(QStringLiteral("txDcFilter")).toInt())
+                .arg(QString::number(values.value(QStringLiteral("7E")).toInt(), 16).rightJustified(4, QLatin1Char('0')).toUpper());
+        m_hardwareAfcText = QStringLiteral("%1 (0x%2)")
+                .arg(object.value(QStringLiteral("afcEnabled")).toBool() ? QStringLiteral("activa") : QStringLiteral("desactivada"))
+                .arg(QString::number(values.value(QStringLiteral("73")).toInt(), 16).rightJustified(4, QLatin1Char('0')).toUpper());
+        const QStringList ratios{QStringLiteral("off"), QStringLiteral("1.333:1"),
+                                 QStringLiteral("2:1"), QStringLiteral("4:1")};
+        const QStringList expandRatios{QStringLiteral("off"), QStringLiteral("1:2"),
+                                       QStringLiteral("1:3"), QStringLiteral("1:4")};
+        m_hardwareRegisterRows = emptyHardwareRegisterRows();
+        const auto addRegister = [&](const QString &name, const QString &interpretation) {
+            bool addressOk = false;
+            const int address = name.toInt(&addressOk, 16);
+            if (!addressOk || address < 0 || address >= m_hardwareRegisterRows.size()
+                || !values.contains(name)) {
+                return;
+            }
+            m_hardwareRegisterRows[address] = QVariantMap{
+                {QStringLiteral("register"), QStringLiteral("0x") + name},
+                {QStringLiteral("value"), QStringLiteral("0x") + QString::number(values.value(name).toInt(), 16).rightJustified(4, QLatin1Char('0')).toUpper()},
+                {QStringLiteral("interpretation"), interpretation}};
+        };
+        const auto registerValue = [&](const QString &name) {
+            return values.value(name).toInt();
+        };
+        const int toneControl = registerValue(QStringLiteral("07"));
+        const int toneMode = (toneControl >> 13) & 0x07;
+        const QStringList toneModes{QStringLiteral("CTCSS 1"), QStringLiteral("CTCSS 2"),
+                                    QStringLiteral("CDCSS"), QStringLiteral("reservado"),
+                                    QStringLiteral("reservado"), QStringLiteral("reservado"),
+                                    QStringLiteral("reservado"), QStringLiteral("reservado")};
+        addRegister(QStringLiteral("07"), QStringLiteral("%1 · palabra de tono %2")
+                    .arg(toneModes.value(toneMode)).arg(toneControl & 0x1fff));
+        const int detectedDtmf = registerValue(QStringLiteral("0B"));
+        addRegister(QStringLiteral("0B"), QStringLiteral("Código DTMF/5-tone detectado: %1")
+                    .arg((detectedDtmf >> 8) & 0x0f));
+        const int detectedCss = registerValue(QStringLiteral("0C"));
+        const QStringList cssCodeTypes{QStringLiteral("positivo"), QStringLiteral("negativo"),
+                                       QStringLiteral("reservado 2"), QStringLiteral("reservado 3")};
+        addRegister(QStringLiteral("0C"), QStringLiteral("CDCSS %1 · desplazamiento %2 · tipo CTCSS %3")
+                    .arg(cssCodeTypes.value((detectedCss >> 14) & 0x03))
+                    .arg((detectedCss >> 12) & 0x03).arg((detectedCss >> 10) & 0x03));
+        addRegister(QStringLiteral("10"), QStringLiteral("Tabla de ganancia AGC · índice 0"));
+        addRegister(QStringLiteral("11"), QStringLiteral("Tabla de ganancia AGC · índice 1"));
+        addRegister(QStringLiteral("12"), QStringLiteral("Tabla de ganancia AGC · índice 2"));
+        addRegister(QStringLiteral("13"), QStringLiteral("Tabla de ganancia AGC · índice 3 (máximo)"));
+        addRegister(QStringLiteral("14"), QStringLiteral("Tabla de ganancia AGC · índice -1 (mínimo)"));
+        addRegister(QStringLiteral("19"), advanced.value(QStringLiteral("micAgc")).toBool() ? QStringLiteral("AGC micrófono activo") : QStringLiteral("AGC micrófono desactivado"));
+        addRegister(QStringLiteral("21"), QStringLiteral("Configuración base detector DTMF · desglose pendiente"));
+        const int dtmf = registerValue(QStringLiteral("24"));
+        m_hardwareDtmfText = QStringLiteral("%1 · %2 · umbral %3 · código %4")
+                .arg(dtmf & 0x0010 ? QStringLiteral("DTMF") : QStringLiteral("SelCall"))
+                .arg(dtmf & 0x0020 ? QStringLiteral("activo") : QStringLiteral("inactivo"))
+                .arg((dtmf >> 7) & 0xff).arg((detectedDtmf >> 8) & 0x0f);
+        addRegister(QStringLiteral("24"), QStringLiteral("Detector %1 · %2 · umbral %3 · máx. %4 símbolos")
+                    .arg(dtmf & 0x0010 ? QStringLiteral("DTMF") : QStringLiteral("SelCall"))
+                    .arg(dtmf & 0x0020 ? QStringLiteral("activo") : QStringLiteral("inactivo"))
+                    .arg((dtmf >> 7) & 0xff).arg(dtmf & 0x0f));
+        addRegister(QStringLiteral("28"), QStringLiteral("Expansor RX %1; punto %2, ruido %3")
+                    .arg(expandRatios.value(advanced.value(QStringLiteral("rxExpandRatio")).toInt()))
+                    .arg(advanced.value(QStringLiteral("rxExpandPoint")).toInt()).arg(advanced.value(QStringLiteral("rxExpandNoise")).toInt()));
+        addRegister(QStringLiteral("29"), QStringLiteral("Compresor TX %1; punto %2, ruido %3")
+                    .arg(ratios.value(advanced.value(QStringLiteral("txCompressRatio")).toInt()))
+                    .arg(advanced.value(QStringLiteral("txCompressPoint")).toInt()).arg(advanced.value(QStringLiteral("txCompressNoise")).toInt()));
+        addRegister(QStringLiteral("30"), m_hardwareBlocksText);
+        addRegister(QStringLiteral("31"), m_hardwareFunctionsText);
+        const int scan = registerValue(QStringLiteral("32"));
+        m_hardwareScanText = QStringLiteral("%1 · tiempo %2")
+                .arg(scan & 0x0001 ? QStringLiteral("activo") : QStringLiteral("inactivo"))
+                .arg((scan >> 14) & 0x03);
+        addRegister(QStringLiteral("32"), QStringLiteral("Escáner de frecuencia %1 · tiempo %2")
+                    .arg(scan & 0x0001 ? QStringLiteral("activo") : QStringLiteral("inactivo"))
+                    .arg((scan >> 14) & 0x03));
+        addRegister(QStringLiteral("33"), m_hardwareGpioText);
+        addRegister(QStringLiteral("36"), m_hardwarePaText);
+        addRegister(QStringLiteral("37"), QStringLiteral("Configuración interna sin desglose confirmado"));
+        addRegister(QStringLiteral("38"), QStringLiteral("Frecuencia: palabra baja"));
+        addRegister(QStringLiteral("39"), QStringLiteral("Frecuencia: palabra alta"));
+        addRegister(QStringLiteral("3D"), advanced.value(QStringLiteral("ifValue")).toInt() == 0 ? QStringLiteral("IF USB") : QStringLiteral("IF/configuración de modulación"));
+        addRegister(QStringLiteral("43"), m_hardwareFilterText);
+        addRegister(QStringLiteral("46"), QStringLiteral("Umbral apertura VOX %1").arg(advanced.value(QStringLiteral("voxOpen")).toInt()));
+        addRegister(QStringLiteral("47"), QStringLiteral("Ruta de audio: %1").arg(outputName));
+        addRegister(QStringLiteral("48"), m_hardwareAudioText);
+        addRegister(QStringLiteral("49"), m_hardwareRfAgcText);
+        addRegister(QStringLiteral("4D"), QStringLiteral("Squelch: glitch de cierre %1").arg(squelch.value(QStringLiteral("closeGlitch")).toInt()));
+        addRegister(QStringLiteral("4E"), QStringLiteral("Squelch: glitch apertura %1; retardos %2/%3").arg(squelch.value(QStringLiteral("openGlitch")).toInt()).arg(squelch.value(QStringLiteral("openDelay")).toInt()).arg(squelch.value(QStringLiteral("closeDelay")).toInt()));
+        addRegister(QStringLiteral("4F"), QStringLiteral("Squelch: ruido apertura/cierre %1/%2").arg(squelch.value(QStringLiteral("openNoise")).toInt()).arg(squelch.value(QStringLiteral("closeNoise")).toInt()));
+        addRegister(QStringLiteral("50"), registerValue(QStringLiteral("50")) & 0x8000
+                    ? QStringLiteral("Audio TX silenciado") : QStringLiteral("Audio TX no silenciado"));
+        addRegister(QStringLiteral("51"), m_hardwareCssText);
+        addRegister(QStringLiteral("52"), QStringLiteral("CTCSS: cola y umbrales %1/%2").arg(css.value(QStringLiteral("foundThreshold")).toInt()).arg(css.value(QStringLiteral("lostThreshold")).toInt()));
+        addRegister(QStringLiteral("63"), QStringLiteral("Indicador glitch %1").arg(registerValue(QStringLiteral("63")) & 0xff));
+        addRegister(QStringLiteral("64"), QStringLiteral("Amplitud voz/VOX %1").arg(registerValue(QStringLiteral("64")) & 0x7fff));
+        addRegister(QStringLiteral("65"), QStringLiteral("Indicador de ruido; pendiente de validar"));
+        addRegister(QStringLiteral("67"), QStringLiteral("RSSI de registro; pendiente de validar"));
+        addRegister(QStringLiteral("68"), QStringLiteral("Medición interna; pendiente"));
+        addRegister(QStringLiteral("69"), QStringLiteral("Medición interna; pendiente"));
+        addRegister(QStringLiteral("6A"), QStringLiteral("Medición interna; pendiente"));
+        addRegister(QStringLiteral("6F"), QStringLiteral("Nivel AF TX/RX %1").arg(registerValue(QStringLiteral("6F")) & 0x3f));
+        addRegister(QStringLiteral("70"), m_hardwareTonesText);
+        addRegister(QStringLiteral("71"), QStringLiteral("Tone1 · palabra %1 · aprox. %2 Hz")
+                    .arg(registerValue(QStringLiteral("71")))
+                    .arg(registerValue(QStringLiteral("71")) / 10.3244, 0, 'f', 1));
+        addRegister(QStringLiteral("72"), QStringLiteral("Tone2 · palabra %1 · aprox. %2 Hz")
+                    .arg(registerValue(QStringLiteral("72")))
+                    .arg(registerValue(QStringLiteral("72")) / 10.3244, 0, 'f', 1));
+        addRegister(QStringLiteral("73"), m_hardwareAfcText);
+        addRegister(QStringLiteral("78"), QStringLiteral("Squelch: RSSI apertura/cierre %1/%2").arg(squelch.value(QStringLiteral("openRssi")).toInt()).arg(squelch.value(QStringLiteral("closeRssi")).toInt()));
+        addRegister(QStringLiteral("79"), QStringLiteral("Umbral cierre VOX %1").arg(advanced.value(QStringLiteral("voxClose")).toInt()));
+        addRegister(QStringLiteral("7A"), QStringLiteral("Código de retardo VOX %1").arg(advanced.value(QStringLiteral("voxDelayCode")).toInt()));
+        addRegister(QStringLiteral("7B"), QStringLiteral("Tabla/configuración RSSI 0"));
+        addRegister(QStringLiteral("7C"), QStringLiteral("Tabla/configuración RSSI 1"));
+        addRegister(QStringLiteral("7D"), QStringLiteral("Configuración AGC/RSSI; desglose pendiente"));
+        addRegister(QStringLiteral("7E"), m_hardwareAgcText);
+        emit stateChanged();
+    } else if (message == QStringLiteral("display_state")) {
+        const QJsonObject a = object.value(QStringLiteral("vfoA")).toObject();
+        const QJsonObject b = object.value(QStringLiteral("vfoB")).toObject();
+        const QJsonObject indicators = object.value(QStringLiteral("indicators")).toObject();
+        const auto updateIfPresent = [](QString &target, const QJsonObject &source,
+                                        const QString &key) {
+            const QString value = source.value(key).toString();
+            if (!value.isEmpty())
+                target = value;
+        };
+        const QString active = object.value(QStringLiteral("activeVfo")).toString();
+        if (!active.isEmpty())
+            m_activeVfo = active;
+        updateIfPresent(m_vfoAFrequencyText, a, QStringLiteral("frequencyText"));
+        updateIfPresent(m_vfoBFrequencyText, b, QStringLiteral("frequencyText"));
+        updateIfPresent(m_vfoAMemory, a, QStringLiteral("memory"));
+        updateIfPresent(m_vfoBMemory, b, QStringLiteral("memory"));
+        updateIfPresent(m_vfoAName, a, QStringLiteral("name"));
+        updateIfPresent(m_vfoBName, b, QStringLiteral("name"));
+        updateIfPresent(m_vfoAMode, a, QStringLiteral("mode"));
+        updateIfPresent(m_vfoBMode, b, QStringLiteral("mode"));
+        updateIfPresent(m_vfoAPower, a, QStringLiteral("power"));
+        updateIfPresent(m_vfoBPower, b, QStringLiteral("power"));
+        const int batteryPercent = indicators.value(QStringLiteral("batteryPercent")).toInt(-1);
+        if (batteryPercent >= 0) m_batteryPercent = batteryPercent;
+        if (indicators.contains(QStringLiteral("signalLevel"))) {
+            m_signalLevel = indicators.value(QStringLiteral("signalLevel")).toInt(-1);
+            m_signalOver = indicators.value(QStringLiteral("signalOver")).toInt();
+        }
+        const auto updateIndicator = [&](QString &target, const QString &key) {
+            const QString value = indicators.value(key).toString();
+            if (!value.isEmpty()) target = value;
+        };
+        updateIndicator(m_stepText, QStringLiteral("step"));
+        updateIndicator(m_toneIndicator, QStringLiteral("tone"));
+        updateIndicator(m_lastDtmf, QStringLiteral("lastDtmf"));
+        QStringList activeIndicators;
+        const auto addFlag = [&](const char *key, const QString &label) {
+            if (indicators.value(QLatin1String(key)).toBool()) activeIndicators.append(label);
+        };
+        addFlag("noa", QStringLiteral("NOA"));
+        addFlag("dtmf", QStringLiteral("DTMF"));
+        addFlag("broadcastFm", QStringLiteral("FM"));
+        addFlag("scan", QStringLiteral("SCAN"));
+        addFlag("dualWatch", QStringLiteral("DWR"));
+        addFlag("crossBand", QStringLiteral("><"));
+        addFlag("xb", QStringLiteral("XB"));
+        addFlag("vox", QStringLiteral("VOX"));
+        addFlag("locked", QStringLiteral("LOCK"));
+        addFlag("function", QStringLiteral("F"));
+        addFlag("charging", QStringLiteral("CARGA"));
+        const QString statusCode = indicators.value(QStringLiteral("statusCode")).toString();
+        if (!statusCode.isEmpty()) activeIndicators.append(statusCode);
+        m_indicatorsText = activeIndicators.join(QStringLiteral(" · "));
+        m_frequencyText = m_activeVfo == QStringLiteral("B")
+            ? m_vfoBFrequencyText : m_vfoAFrequencyText;
+        emit stateChanged();
     } else if (message == QStringLiteral("stats")) {
         m_bytesReceived = object.value(QStringLiteral("bytes")).toString().toULongLong();
         m_discardedBytes = object.value(QStringLiteral("discarded")).toString().toULongLong();

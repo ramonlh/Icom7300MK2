@@ -20,11 +20,62 @@ temporalmente `Timeout` en la pantalla del UV-K5; al desconectar y reiniciar la
 radio recuperó su funcionamiento normal. Una repetición posterior funcionó y
 recibió datos. Mantener este antecedente visible y detener la prueba si reaparece.
 
-**LÍMITE ESTABLE:** no existe en esta revisión ruta de escritura serie, cambio
-de frecuencia o modo, handshake, teclas, TX/PTT, EEPROM ni firmware. El servidor
-rechaza todos los mensajes LAN de control. Continuar únicamente ampliando y
-validando la lectura de datos. Cualquier escritura futura requiere instrucción
-expresa y debe desarrollarse después de este punto estable.
+**LÍMITE ESTABLE:** no existe ruta de cambio de frecuencia o modo, teclas,
+TX/PTT, escritura EEPROM ni firmware. Como ampliación experimental autorizada,
+el servidor puede habilitar explícitamente `--allow-eeprom-query`: el cliente
+solicita entonces un volcado completo mediante Hello y ReadEeprom, sin implementar
+WriteEeprom. El resto de mensajes de control continúa rechazado.
+
+**Actualización de telemetría experimental:** la consulta lenta BK4819 abarca
+50 registros cada 30 segundos, sin alterar GetRssi (1 s) ni la frecuencia interna
+`0x38/0x39` (2 s). Se excluyen los registros de banderas de interrupción `0x02`
+y `0x3F`. La primera lectura lenta se solicita a los 3,5 segundos del arranque;
+las siguientes mantienen los 30 segundos. La tabla del cliente reserva siempre
+las 128 direcciones `0x00-0x7F`.
+
+**EEPROM:** existe constructor validado de `ReadEeprom 0x051B` y
+decodificador de `0x051C`, con bloques de 1-128 bytes y rango `0x0000-0x1FFF`.
+La utilidad independiente inicia explícitamente sesión con `Hello 0x0514`, que
+puede apagar la iluminación, y realiza una sola lectura; no usa `0x052F`. No
+existe ruta de escritura. El flujo completo cliente–LAN–PTY, con 64 bloques de
+128 bytes y volcado hexadecimal en ventana propia, está probado offline. La
+prueba física permanece pendiente.
+
+La ventana EEPROM incluye tres vistas: 200 canales interpretados, ajustes y
+calibraciones agrupados, y volcado hexadecimal. También interpreta VFO/bandas,
+radio FM, pantalla, operación, teclas, mensajes, DTMF, escaneo y los campos de
+calibración confirmados por el firmware de referencia. Los secretos no se muestran
+en claro y los contactos/calibraciones cuya estructura o unidad no está confirmada
+se etiquetan como datos brutos o pendientes.
+
+### Modelo observable de pantalla — desarrollo posterior al punto estable
+
+**CONFIRMADO en código y pruebas offline:** se añade un `DisplayModel` pasivo y
+compartido por replay y fuente serie. Interpreta los borrados de líneas, rechaza
+texto no imprimible, separa las zonas A (líneas 1–3) y B (5–7), identifica el
+selector lleno del evento tipo 7 y reconstruye la frecuencia B dividida entre
+dos elementos de pantalla. El fixture real confirma A activo, `145.67500` en A
+y `110.93750` en B. El cliente deja de deducir estos datos directamente de cada
+texto y consume mensajes normalizados `display_state` ligados a la sesión.
+
+La GUI resalta el VFO observado como activo. Se mantienen las etiquetas de dato
+candidato: todavía se necesitan nuevas capturas físicas para validar otras
+pantallas, VFO libre, memorias y cambios de selección. Seis suites aprobadas,
+incluidas replay real y ausencia de salida serie.
+
+**CONFIRMADO por captura física posterior:** en pantalla VFO libre, A transmite
+la parte principal en tipo 3, x=32, línea 1 (`435.900`) y dos cifras finales en
+x=113, línea 2 (`00`); B utiliza la disposición equivalente en líneas 5/6
+(`111.137` + `50`). El modelo admite ahora tanto esta forma fragmentada como la
+frecuencia completa observada anteriormente en memoria. La regresión reconstruye
+`435.90000`, conserva `F6` y potencia `L`; 6/6 suites continúan aprobadas.
+
+El modelo expone además, según la semántica upstream, señal cruda tipo 8,
+porcentaje aproximado de batería, paso visible, último DTMF y los indicadores
+NOA, DTMF, FM broadcast, scan, DWR, cross-band, XB, VOX, bloqueo, función y
+carga. No convierte la señal a S-units o dBm. El carácter de tono visible se
+conserva sin afirmar todavía si representa CTCSS o DCS. SQL permanece como
+etiqueta de menú mientras no aparezca un valor inequívoco.
 
 ## Segunda fase — servidor serie y prueba LAN entre PCs
 

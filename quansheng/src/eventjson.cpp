@@ -27,4 +27,31 @@ QJsonObject eventJson(const Event& e) {
     }
     return json;
 }
+
+QJsonObject displayStateJson(const DisplayModel& model) {
+    const auto vfo = [](const DisplayVfo& value) {
+        return QJsonObject{{"frequencyText", QString::fromStdString(value.frequency)},
+                           {"memory", QString::fromStdString(value.memory)},
+                           {"name", QString::fromStdString(value.name)},
+                           {"mode", QString::fromStdString(value.mode)},
+                           {"power", QString::fromStdString(value.power)},
+                           {"selected", value.selected}};
+    };
+    const auto& flags = model.indicators();
+    return {{"message", "display_state"},
+            {"activeVfo", QString::fromStdString(model.activeVfo())},
+            {"vfoA", vfo(model.vfoA())}, {"vfoB", vfo(model.vfoB())},
+            {"indicators", QJsonObject{
+                {"signalLevel", flags.signalLevel}, {"signalOver", flags.signalOver},
+                {"batteryPercent", flags.batteryPercent}, {"noa", flags.noa},
+                {"dtmf", flags.dtmf}, {"broadcastFm", flags.broadcastFm},
+                {"scan", flags.scan}, {"dualWatch", flags.dualWatch},
+                {"crossBand", flags.crossBand}, {"xb", flags.xb},
+                {"vox", flags.vox}, {"locked", flags.locked},
+                {"function", flags.function}, {"charging", flags.charging},
+                {"statusCode", QString::fromStdString(flags.statusCode)},
+                {"tone", QString::fromStdString(flags.tone)},
+                {"step", QString::fromStdString(flags.step)},
+                {"lastDtmf", QString::fromStdString(flags.lastDtmf)}}}};
+}
 }

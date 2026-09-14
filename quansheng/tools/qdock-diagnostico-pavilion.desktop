@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Prueba Quansheng READ-ONLY
+Comment=Verifica y captura el puerto serie del UV-K5 sin enviar comandos
+Exec=/home/ramon/qdock-readonly/tools/diagnose-qdock-pavilion.sh
+Path=/home/ramon/qdock-readonly
+Terminal=true
+Icon=utilities-terminal
+Categories=Utility;
+StartupNotify=true
