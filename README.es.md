@@ -525,6 +525,10 @@ cd ~/qdock-readonly
 ./tools/start-qdock-pavilion-telemetry.sh
 ```
 
+El lanzador solicita de forma oculta un token LAN de al menos 16 caracteres si
+`QDOCK_LAN_TOKEN` no está definido. Debe configurarse el mismo token en el cliente
+del HP principal. No existe un token predeterminado en el repositorio.
+
 El script mantiene TX/PTT, teclas, escritura EEPROM y escritura de registros bloqueados.
 
 ### Documentación Quansheng

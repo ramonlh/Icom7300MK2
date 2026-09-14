@@ -38,6 +38,9 @@ la dirección local del servidor mediante `--listen`.
 Token independiente en `QDOCK_LAN_TOKEN`, 16–256 bytes UTF-8; no se imprime ni se
 incluye en argumentos CLI. TCP no cifra: esta versión es para loopback/LAN privada.
 No se modifican firewall, servicios ni configuración de ninguno de los PCs.
+Los lanzadores no proporcionan un valor predeterminado: solicitan el token de
+forma oculta cuando la variable no existe. Un token incluido alguna vez en un
+repositorio o paquete debe considerarse público y sustituirse en servidor y cliente.
 
 Límites: 8 clientes; 4096 bytes por línea recibida sin LF; autenticación en 5 s;
 cola de salida máxima de 1 MiB por cliente, superada la cual se aborta su conexión.

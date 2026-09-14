@@ -9,6 +9,7 @@ android/local.properties
 android/app/build/
 *.zip
 *.sha256
+qdock-pavilion-*.tar.gz
 
 # Lanzadores y utilidades locales con rutas específicas del equipo
 com.google.AndroidStudio.desktop

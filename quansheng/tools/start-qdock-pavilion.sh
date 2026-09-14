@@ -5,7 +5,15 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${QDOCK_SERVER_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 SERVER="${PROJECT_DIR}/build/qdock-server"
 DEVICE="/dev/ttyUSB0"
-TOKEN="${QDOCK_LAN_TOKEN:-prueba-local-quansheng-2026}"
+if [[ -z "${QDOCK_LAN_TOKEN:-}" ]]; then
+    read -r -s -p "Token LAN nuevo (mínimo 16 caracteres): " QDOCK_LAN_TOKEN
+    echo
+fi
+if [[ ${#QDOCK_LAN_TOKEN} -lt 16 ]]; then
+    echo "El token LAN debe tener al menos 16 caracteres." >&2
+    exit 1
+fi
+TOKEN="${QDOCK_LAN_TOKEN}"
 
 if [[ ! -x "${SERVER}" ]]; then
     echo "No se encuentra el servidor: ${SERVER}" >&2

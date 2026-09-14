@@ -62,6 +62,11 @@ export QDOCK_LAN_TOKEN
 ./build/qdock-server --replay /tmp/qdock-lan-screen.raw
 ```
 
+Los lanzadores del Pavilion no contienen ningún token predeterminado. Si
+`QDOCK_LAN_TOKEN` no está definido, solicitan uno de forma oculta al arrancar.
+Debe introducirse el mismo valor en la configuración del cliente principal.
+No reutilices tokens publicados anteriormente en scripts o paquetes de prueba.
+
 En otra terminal, definir/exportar el mismo token y ejecutar:
 
 ```sh

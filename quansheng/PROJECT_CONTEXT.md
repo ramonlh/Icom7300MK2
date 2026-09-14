@@ -10,6 +10,12 @@ No confundir el port nativo con QuanshengDock Windows bajo Wine.
 
 ## Punto estable READ-ONLY — 13 de septiembre de 2026
 
+**Seguridad de credenciales — 14 de septiembre de 2026:** los lanzadores del
+Pavilion ya no contienen un token LAN predeterminado. Si la variable
+`QDOCK_LAN_TOKEN` no existe, solicitan un valor de forma oculta y rechazan menos
+de 16 caracteres. Cualquier valor publicado anteriormente debe considerarse
+público y rotarse tanto en servidor como en cliente.
+
 **CONFIRMADO por prueba física del usuario en el Pavilion:** `qdock-server`,
 abriendo `/dev/ttyUSB0` con `QIODevice::ReadOnly`, recibe por LAN frecuencia,
 estado RX, batería, modos y otras observaciones de la radio. La aplicación
