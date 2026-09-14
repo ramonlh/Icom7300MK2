@@ -1,104 +1,104 @@
-# Control IC-7300MK2
+# IC-7300MK2 Control
 
 ![Platform](https://img.shields.io/badge/platform-Linux-1793D1)
 ![Qt](https://img.shields.io/badge/Qt-6.4%2B-41CD52)
 ![C++](https://img.shields.io/badge/C%2B%2B-20-00599C)
 ![Version](https://img.shields.io/badge/version-1.2.12-blue)
-![Status](https://img.shields.io/badge/status-en%20desarrollo-orange)
+![Status](https://img.shields.io/badge/status-in%20development-orange)
 
-Aplicación de escritorio para **Linux** destinada al control del transceptor **Icom IC-7300MK2** mediante **CI-V**, desarrollada en **C++20, Qt 6 y QML**.
+Desktop application for **Linux** designed to control the **Icom IC-7300MK2** transceiver via **CI-V**, developed with **C++20, Qt 6 and QML**.
 
-El objetivo del proyecto es disponer de un panel único, compacto y legible desde el que manejar las funciones habituales de la radio, mantener la sincronización con los cambios realizados desde el propio equipo y disponer de herramientas adicionales como spectrum/waterfall, memorias, diagnóstico CI-V y un entrenador Morse integrado.
+The goal of the project is to provide a single, compact and readable control panel for the radio's most commonly used functions, keep the software synchronized with changes made directly on the radio, and provide additional tools such as spectrum/waterfall, memories, CI-V diagnostics and an integrated Morse trainer.
 
 > [!NOTE]
-> Este proyecto está desarrollado específicamente alrededor del **IC-7300MK2**. No pretende ser, por el momento, un controlador CI-V genérico para todos los modelos Icom.
+> This project is developed specifically around the **IC-7300MK2**. At present, it is not intended to be a generic CI-V controller for all Icom models.
 
 ---
 
-### v1.2.12 — Interfaz agrupada y S-Meter analógico
+### v1.2.12 — Grouped interface and analog S-Meter
 
-- La barra superior y los paneles laterales agrupan los controles por familias con colores y títulos diferenciados.
-- Nuevo S-Meter analógico con aguja animada, lectura CI-V más regular y lectura digital complementaria.
-- Redistribución del display, VFO, medidores y paneles inferiores para mejorar la visibilidad.
-- La ventana principal usa una altura fija de 880 px y conserva el ancho ajustable.
-- La ventana de control por Internet queda vinculada a la principal y se cierra explícitamente al salir.
+- The top bar and side panels group controls by function family, using distinct colors and titles.
+- New analog S-Meter with an animated needle, smoother CI-V readings and an additional digital readout.
+- Rearranged display, VFO, meters and lower panels for improved visibility.
+- The main window uses a fixed height of 880 px while keeping the width adjustable.
+- The Internet control window remains linked to the main window and is explicitly closed when the application exits.
 
-### v1.2.11 — Contraste del arranque automático remoto
+### v1.2.11 — Improved contrast for remote auto-start
 
-- La opción **ACTIVAR INTERNET AL INICIAR EL PROGRAMA** usa texto blanco en negrita para que sea legible sobre el fondo oscuro.
+- The **ENABLE INTERNET AT PROGRAM START** option uses bold white text so it remains readable against the dark background.
 
-### v1.2.10 — Memoria de bandas en control remoto
+### v1.2.10 — Band memory in remote control
 
-- Los botones de banda de la interfaz web recuerdan la última frecuencia utilizada por banda.
-- La memoria es independiente para VFO A y VFO B y se guarda en la configuración del servidor remoto.
-- Cada botón muestra la frecuencia memorizada y la banda en metros.
+- Band buttons in the web interface remember the last frequency used on each band.
+- The memory is independent for VFO A and VFO B and is stored in the remote server configuration.
+- Each button displays the stored frequency and the band in meters.
 
 
 
-### v1.2.10 — Token remoto de 8 caracteres
+### v1.2.10 — 8-character remote token
 
-El acceso web utiliza ahora un token alfanumérico de **8 caracteres**, pensado para ser fácil de teclear desde un teléfono u otro ordenador. Se omiten caracteres visualmente ambiguos (`0`, `1`, `I`, `L`, `O`). El token sigue siendo una protección adicional para uso dentro de una **LAN o VPN privada** como Tailscale/WireGuard; el servidor HTTP no debe publicarse directamente en Internet.
+Web access now uses an **8-character** alphanumeric token designed to be easy to type from a phone or another computer. Visually ambiguous characters (`0`, `1`, `I`, `L`, `O`) are omitted. The token remains an additional layer of protection intended for use inside a **LAN or private VPN** such as Tailscale/WireGuard; the HTTP server must not be exposed directly to the Internet.
 
-### v1.2.10 — Clave remota definida por el propietario
+### v1.2.10 — Owner-defined remote key
 
-La clave de acceso al panel web puede fijarse manualmente desde la ventana **INTERNET**. Debe tener exactamente 8 caracteres alfanuméricos y se conserva entre reinicios, por lo que el propietario puede memorizarla y acceder sin consultar previamente el PC de la estación. La opción de generación aleatoria continúa disponible.
+The access key for the web panel can be set manually from the **INTERNET** window. It must contain exactly 8 alphanumeric characters and is preserved across restarts, allowing the owner to memorize it and connect without first checking the station PC. Random key generation remains available.
 
-## Control remoto v1.2.11
+## Remote control v1.2.11
 
-- Entrada de frecuencia compatible con `14.074.000`, `14.074`, `14074` y `14074000`.
-- Cambio de frecuencia con `Enter`, botones de paso y clic sobre Spectrum/Waterfall.
-- Waterfall con rejilla y marcas de frecuencia reales.
-- Conserva todos los controles remotos introducidos en v1.2.1 y el Spectrum/Waterfall de v1.2.2.
+- Frequency input supports `14.074.000`, `14.074`, `14074` and `14074000`.
+- Frequency changes can be applied with `Enter`, step buttons and clicks on the Spectrum/Waterfall.
+- Waterfall includes a grid and real frequency markers.
+- Retains all remote controls introduced in v1.2.1 and the Spectrum/Waterfall introduced in v1.2.2.
 
-## Estado del proyecto
+## Project status
 
-Versión actual: **1.2.12**
+Current version: **1.2.12**
 
-El programa se encuentra en desarrollo activo. Las funciones principales de control CI-V, VFO, niveles, memorias, spectrum/waterfall y entrenador Morse están implementadas y se siguen refinando.
+The application is under active development. The main CI-V control, VFO, level, memory, spectrum/waterfall and Morse trainer functions are implemented and continue to be refined.
 
-Plataforma principal de desarrollo y pruebas:
+Main development and test platform:
 
 - Linux Mint / Ubuntu.
-- Qt 6.4 o posterior.
-- Conexión USB con el IC-7300MK2.
-- CI-V a **115200 baud**.
-- Dirección CI-V recomendada para el IC-7300MK2: **0x94**.
+- Qt 6.4 or later.
+- USB connection to the IC-7300MK2.
+- CI-V at **115200 baud**.
+- Recommended CI-V address for the IC-7300MK2: **0x94**.
 
 ---
 
-## Funciones principales
+## Main features
 
-### Conexión CI-V
+### CI-V connection
 
-- Detección y conexión al puerto serie de la radio.
-- Detección genérica de USB (B) / `if02` sin números de serie codificados en los fuentes.
-- En Linux se prioriza el enlace persistente de `/dev/serial/by-id/` y, como respaldo, la identificación de `bInterfaceNumber=02` mediante sysfs.
-- Configuración manual del puerto, velocidad y dirección CI-V.
-- Reconexión.
-- Polling periódico del estado.
-- Confirmación de órdenes CI-V.
-- Cierre explícito del puerto al salir para evitar que quede bloqueado.
-- Diagnóstico de tráfico CI-V TX/RX.
-- Sincronización con cambios efectuados desde el frontal de la radio.
+- Detection and connection to the radio's serial port.
+- Generic detection of USB (B) / `if02` without hard-coded serial numbers in the source code.
+- On Linux, the persistent `/dev/serial/by-id/` link is preferred, with `bInterfaceNumber=02` identification through sysfs used as a fallback.
+- Manual configuration of port, baud rate and CI-V address.
+- Reconnection.
+- Periodic status polling.
+- CI-V command acknowledgment.
+- Explicit port closing on exit to prevent it from remaining locked.
+- CI-V TX/RX traffic diagnostics.
+- Synchronization with changes made from the radio's front panel.
 
-### VFO y frecuencia
+### VFO and frequency
 
-- VFO A y VFO B.
-- Selección directa del VFO.
+- VFO A and VFO B.
+- Direct VFO selection.
 - `A=B`.
-- Intercambio `A/B`.
+- `A/B` swap.
 - SPLIT.
 - RIT.
 - ΔTX.
-- Introducción directa de frecuencia.
-- Ajustes de frecuencia por pasos.
-- Pasos de sintonía configurables.
-- Botones de banda.
-- Mando de sintonía gráfico.
+- Direct frequency entry.
+- Frequency adjustment by steps.
+- Configurable tuning steps.
+- Band buttons.
+- Graphical tuning dial.
 
-### Modos y filtros
+### Modes and filters
 
-Modos disponibles desde el panel:
+Modes available from the panel:
 
 - LSB
 - USB
@@ -109,50 +109,50 @@ Modos disponibles desde el panel:
 - AM
 - FM
 
-Además:
+Additionally:
 
 - DATA ON/OFF.
 - FIL1 / FIL2 / FIL3.
-- Curva y forma de filtro.
-- Sincronización del modo y filtro con la radio.
+- Filter curve and shape.
+- Mode and filter synchronization with the radio.
 
-### Niveles y recepción
+### Levels and reception
 
 - AF Gain.
 - RF Gain.
 - Squelch.
 - RF Power.
-- Preamplificador.
-- Atenuador.
+- Preamplifier.
+- Attenuator.
 - AGC.
 - Noise Blanker.
-- Nivel de NB.
+- NB level.
 - Noise Reduction.
-- Nivel de NR.
+- NR level.
 - Auto Notch.
 - Manual Notch.
-- Posición y anchura del notch.
+- Notch position and width.
 - Twin PBT.
 - IP+.
 
-### Transmisión
+### Transmission
 
-- PTT desde software.
+- Software PTT.
 - RF Power.
 - Mic Gain.
-- Compresor.
-- Nivel de compresión.
+- Compressor.
+- Compression level.
 - Monitor.
-- Nivel de monitor.
+- Monitor level.
 - VOX.
 - VOX Gain.
 - Anti-VOX.
-- Filtro TX.
+- TX filter.
 - Tuner.
-- Lectura de estado TX.
+- TX status reading.
 
 > [!WARNING]
-> Las funciones de transmisión pueden hacer que la radio emita RF. Comprueba siempre la antena, carga, potencia y condiciones de operación antes de activar TX, TUNE, BK-IN u otras funciones de transmisión.
+> Transmission functions can cause the radio to emit RF. Always check the antenna, load, power level and operating conditions before enabling TX, TUNE, BK-IN or other transmission-related functions.
 
 ### CW
 
@@ -166,251 +166,251 @@ Además:
 - Rise Time.
 - Paddle Reverse.
 - Key Type.
-- Memorias del keyer.
-- Mensaje CW directo.
+- Keyer memories.
+- Direct CW message.
 
-### FM y RTTY
+### FM and RTTY
 
 - Repeater Tone.
 - Tone Squelch.
-- Frecuencias de tono.
+- Tone frequencies.
 - Twin Peak Filter.
 - Mark Frequency.
 - Shift Width.
 - Keying Reverse.
 
-### Medidores
+### Meters
 
-Lectura gráfica de diferentes medidas proporcionadas por la radio:
+Graphical display of several measurements provided by the radio:
 
 - S-Meter.
-- Potencia.
+- Power.
 - SWR.
 - ALC.
 - COMP.
-- Tensión.
-- Corriente.
-- Estado de overflow cuando está disponible.
+- Voltage.
+- Current.
+- Overflow status when available.
 
-### Spectrum Scope y Waterfall
+### Spectrum Scope and Waterfall
 
-La interfaz remota web incluye desde la versión 1.2.10 un **Spectrum Scope y Waterfall en tiempo real**. El navegador recibe los 475 niveles de cada trama CI-V y los dibuja localmente, evitando transmitir capturas de pantalla.
+Since version 1.2.10, the remote web interface includes a **real-time Spectrum Scope and Waterfall**. The browser receives all 475 levels from each CI-V frame and draws them locally, avoiding the need to transmit screenshots.
 
-Desde la web se puede:
+From the web interface you can:
 
-- iniciar y detener el stream del scope;
-- seleccionar modo CENTER/FIXED/SCROLL;
-- seleccionar span;
-- cambiar FAST/MID/SLOW;
-- activar HOLD y VBW WIDE;
-- limpiar el waterfall local;
-- pulsar sobre spectrum o waterfall para sintonizar la frecuencia indicada.
+- start and stop the scope stream;
+- select CENTER/FIXED/SCROLL mode;
+- select span;
+- switch between FAST/MID/SLOW;
+- enable HOLD and VBW WIDE;
+- clear the local waterfall;
+- click on the spectrum or waterfall to tune to the indicated frequency.
 
-La escala vertical del spectrum es relativa, de **0 a −80 dB**.
+The vertical spectrum scale is relative, from **0 to −80 dB**.
 
 - Spectrum scope.
 - Waterfall.
-- Span configurable.
+- Configurable span.
 - Hold.
-- Velocidad de barrido.
+- Sweep speed.
 - VBW.
-- Escala gráfica.
-- Limpieza del waterfall.
+- Graphical scale.
+- Waterfall clearing.
 
-### Memorias
+### Memories
 
-- Lectura de memorias.
-- Lectura conjunta de canales.
-- Visualización de canales ocupados y libres.
-- Selección de memoria.
-- Copia a VFO.
-- Escritura y sobrescritura.
-- Gestión de registros de banda.
+- Memory reading.
+- Combined channel reading.
+- Display of occupied and free channels.
+- Memory selection.
+- Copy to VFO.
+- Write and overwrite.
+- Band register management.
 
 ### Scanner
 
-- Inicio y parada de scan.
-- Selección de tipo de escaneo.
-- Estado del escáner.
+- Start and stop scan.
+- Scan type selection.
+- Scanner status.
 
-### Diagnóstico CI-V
+### CI-V diagnostics
 
-Incluye una ventana específica para comprobar:
+Includes a dedicated window for checking:
 
-- Última trama enviada.
-- Última trama recibida.
-- Historial TX.
-- Historial RX.
-- Estado de conexión.
-- Puerto activo.
-- Parámetros CI-V.
+- Last frame sent.
+- Last frame received.
+- TX history.
+- RX history.
+- Connection status.
+- Active port.
+- CI-V parameters.
 
-Es especialmente útil para desarrollar nuevas funciones o comprobar el comportamiento real de la radio.
+It is especially useful when developing new functions or checking the radio's actual behavior.
 
 ---
 
 
-## Control remoto web
+## Web remote control
 
-Desde la versión **1.2.0** el programa incorpora un servidor web integrado para controlar la radio desde un navegador sin abrir un segundo puerto CI-V.
+Since version **1.2.0**, the application includes an integrated web server for controlling the radio from a browser without opening a second CI-V port.
 
-En **v1.2.10** la interfaz remota de escritorio se compacta para caber en una pantalla de 1366×768 sin scroll vertical y añade A=B, intercambio de VFO, RIT/ΔTX, NB/NR, notch, IP+, Twin PBT y forma de filtro. En móvil se conserva el diseño adaptable con desplazamiento cuando sea necesario.
+In **v1.2.10**, the desktop remote interface was compacted to fit a 1366×768 screen without vertical scrolling, and A=B, VFO swap, RIT/ΔTX, NB/NR, notch, IP+, Twin PBT and filter shape were added. On mobile devices, the adaptive layout is retained with scrolling where necessary.
 
-El servidor forma parte del mismo proceso y utiliza el mismo `RadioController` que la interfaz QML local. De esta forma, los cambios realizados desde el navegador, el panel local o la propia radio convergen en el mismo estado CI-V.
+The server runs within the same process and uses the same `RadioController` as the local QML interface. This allows changes made from the browser, the local panel or the radio itself to converge on the same CI-V state.
 
-### Primera versión remota
+### First remote version
 
-Incluye:
+Includes:
 
-- servidor HTTP integrado;
-- puerto predeterminado `7300`, configurable;
-- autenticación obligatoria mediante token aleatorio;
-- interfaz adaptable a ordenador, tablet y móvil;
-- estado de VFO A/B, frecuencia, modo, filtro, DATA, SPLIT y S-meter;
-- cambio de frecuencia;
-- selección VFO A/B;
-- modos LSB, USB, CW, RTTY, AM, FM, CW-R y RTTY-R;
+- integrated HTTP server;
+- default port `7300`, configurable;
+- mandatory authentication using a random token;
+- responsive interface for desktop, tablet and mobile;
+- VFO A/B, frequency, mode, filter, DATA, SPLIT and S-meter status;
+- frequency changes;
+- VFO A/B selection;
+- LSB, USB, CW, RTTY, AM, FM, CW-R and RTTY-R modes;
 - FIL1/FIL2/FIL3;
-- DATA y SPLIT;
-- AF Gain, RF Gain, SQL y RF Power;
-- P.AMP, ATT, AGC y TUNER ON/OFF;
-- bloqueo de modificaciones remotas mientras la radio está transmitiendo.
+- DATA and SPLIT;
+- AF Gain, RF Gain, SQL and RF Power;
+- P.AMP, ATT, AGC and TUNER ON/OFF;
+- remote changes blocked while the radio is transmitting.
 
-Por seguridad, esta primera versión **no expone PTT ni TUNE por Internet**.
+For safety reasons, this first version **does not expose PTT or TUNE over the Internet**.
 
-### Acceso desde la red
+### Access from the local network
 
-En el programa principal abre **INTERNET**, inicia el servidor y utiliza una de las direcciones mostradas, por ejemplo:
+In the main application, open **INTERNET**, start the server and use one of the displayed addresses, for example:
 
 ```text
 http://192.168.1.50:7300/
 ```
 
-El navegador solicitará el token de acceso que aparece en la misma ventana de configuración.
+The browser will request the access token shown in the same configuration window.
 
-### Acceso desde Internet
+### Access from the Internet
 
-Se recomienda utilizar una VPN privada como **Tailscale** o **WireGuard**. El servidor escucha en las interfaces IPv4 del equipo, por lo que una dirección de la VPN aparecerá entre las direcciones disponibles cuando la VPN esté activa.
+A private VPN such as **Tailscale** or **WireGuard** is recommended. The server listens on the computer's IPv4 interfaces, so an address from the VPN will appear among the available addresses when the VPN is active.
 
 > [!WARNING]
-> No se recomienda redirigir directamente el puerto `7300` desde el router a Internet. La versión 1.2.0 utiliza HTTP y está diseñada para operar dentro de una LAN o de una VPN privada.
+> Directly forwarding port `7300` from the router to the Internet is not recommended. Version 1.2.0 uses HTTP and is designed to operate within a LAN or private VPN.
 
-El token puede regenerarse en cualquier momento. Al hacerlo, los navegadores que utilizaban el token anterior pierden el acceso.
+The token can be regenerated at any time. When it is regenerated, browsers using the previous token lose access.
 
-# Entrenador Morse
+# Morse Trainer
 
-El programa incluye un entrenador Morse con dos modalidades diferentes.
+The application includes a Morse trainer with two different operating modes.
 
-## 1. Manipulación
+## 1. Keying practice
 
-Pensado para practicar con el **manipulador real conectado al jack KEY del IC-7300MK2**.
+Designed for practice using the **real key or paddle connected to the IC-7300MK2 KEY jack**.
 
-El programa detecta el sidetone de la radio mediante el audio USB y reconstruye los puntos, rayas y caracteres.
+The application detects the radio's sidetone through USB audio and reconstructs dots, dashes and characters.
 
-Funciones:
+Features:
 
-- Selección de dispositivo de entrada de audio.
-- Detección del nivel de entrada.
-- Detección del tono CW.
-- Umbral automático o manual.
-- Visualización de `KEY DOWN`.
-- Patrón Morse actual.
-- Texto decodificado.
-- Ejercicios Koch.
-- Velocidad de carácter.
-- Velocidad efectiva Farnsworth.
-- Puntuación.
-- Estadísticas por sesión y lección.
+- Audio input device selection.
+- Input level detection.
+- CW tone detection.
+- Automatic or manual threshold.
+- `KEY DOWN` display.
+- Current Morse pattern.
+- Decoded text.
+- Koch exercises.
+- Character speed.
+- Farnsworth effective speed.
+- Scoring.
+- Statistics by session and lesson.
 
-### Preparar radio
+### Prepare radio
 
-La opción **PREPARAR RADIO** guarda los parámetros relevantes de la radio antes del ejercicio y configura el equipo para la práctica.
+The **PREPARE RADIO** option saves the relevant radio parameters before the exercise and configures the radio for practice.
 
-Al cerrar el entrenador se intenta restaurar el estado anterior de:
+When the trainer is closed, it attempts to restore the previous state of:
 
-- modo;
+- mode;
 - DATA;
-- filtro;
-- potencia RF;
+- filter;
+- RF power;
 - Break-in;
 - CW Pitch;
-- velocidad del manipulador.
+- keyer speed.
 
-El modo recomendado para practicar es **BK-IN OFF**, de forma que el manipulador genere sidetone sin transmitir RF.
+The recommended mode for practice is **BK-IN OFF**, so the key or paddle generates sidetone without transmitting RF.
 
-## 2. Recepción y copia
+## 2. Receiving and copying
 
-Genera ejercicios Morse desde el ordenador para practicar recepción de oído.
+Generates Morse exercises from the computer for practicing copy by ear.
 
-Incluye:
+Includes:
 
-- Método Koch.
-- Farnsworth activable/desactivable.
-- Velocidad de carácter.
-- Velocidad efectiva.
-- Número de grupos.
-- Caracteres por grupo.
-- Cuenta atrás configurable antes de comenzar.
-- Repetición del ejercicio.
-- Campo para escribir lo copiado.
-- Reproducción de símbolos individuales.
-- Letras, números y signos Morse.
-- Puntuación automática.
-- Comparación visual entre enviado y copiado.
+- Koch method.
+- Farnsworth on/off.
+- Character speed.
+- Effective speed.
+- Number of groups.
+- Characters per group.
+- Configurable countdown before starting.
+- Exercise replay.
+- Field for typing copied text.
+- Playback of individual symbols.
+- Morse letters, numbers and punctuation.
+- Automatic scoring.
+- Visual comparison between sent and copied text.
 
-### Comparación de errores
+### Error comparison
 
-Al finalizar se muestran dos líneas alineadas:
+At the end, two aligned lines are shown:
 
-- **ENVIADO**
-- **COPIADO**
+- **SENT**
+- **COPIED**
 
-Los caracteres correctos aparecen diferenciados y los errores se resaltan en rojo.
+Correct characters are visually differentiated and errors are highlighted in red.
 
-La puntuación distingue:
+The score distinguishes between:
 
-- aciertos;
-- sustituciones;
-- omisiones;
-- caracteres añadidos.
+- correct characters;
+- substitutions;
+- omissions;
+- extra characters.
 
-Los espacios usados únicamente para separar grupos no intervienen en la puntuación.
+Spaces used only to separate groups do not affect the score.
 
-La comparación respeta estrictamente el número de símbolos transmitidos: en un ejercicio de 25 símbolos no puede aparecer un nuevo acierto después de la posición 25.
+The comparison strictly respects the number of transmitted symbols: in a 25-symbol exercise, no new correct match can appear after position 25.
 
-## Lecciones Koch
+## Koch lessons
 
-El avance de lección es manual.
+Lesson progression is manual.
 
-Una lección se considera **SUPERADA** cuando alcanza una mejor nota de **90 o más**.
+A lesson is considered **PASSED** when its best score reaches **90 or higher**.
 
-Cada lección puede resetearse de forma independiente sin eliminar las estadísticas del resto.
+Each lesson can be reset independently without deleting statistics from the other lessons.
 
 ---
 
-## Requisitos
+## Requirements
 
 ### Hardware
 
 - Icom IC-7300MK2.
-- Cable USB entre la radio y el ordenador.
-- Para la modalidad de manipulación Morse:
-  - manipulador conectado al IC-7300MK2;
-  - audio USB de la radio disponible en Linux.
+- USB cable between the radio and the computer.
+- For Morse keying practice:
+  - key or paddle connected to the IC-7300MK2;
+  - radio USB audio available in Linux.
 
 ### Software
 
 - Linux.
-- CMake 3.16 o posterior.
-- Compilador con soporte C++20.
-- Qt 6.4 o posterior con:
+- CMake 3.16 or later.
+- Compiler with C++20 support.
+- Qt 6.4 or later with:
   - Qt Quick
   - Qt Quick Controls 2
   - Qt Serial Port
   - Qt Multimedia
   - Qt Network
 
-En distribuciones basadas en Ubuntu/Linux Mint pueden instalarse las dependencias de desarrollo con:
+On Ubuntu/Linux Mint-based distributions, the development dependencies can be installed with:
 
 ```bash
 sudo apt update
@@ -424,30 +424,30 @@ sudo apt install \
     qt6-multimedia-dev
 ```
 
-Los nombres exactos de los paquetes pueden variar entre distribuciones.
+Exact package names may vary between distributions.
 
 ---
 
-## Permisos del puerto serie
+## Serial port permissions
 
-En Linux, el usuario debe tener permiso para acceder a `/dev/ttyACM*`.
+On Linux, the user must have permission to access `/dev/ttyACM*`.
 
-Comprueba los puertos disponibles:
+Check the available ports:
 
 ```bash
 ls -l /dev/ttyACM*
 ls -l /dev/serial/by-id/
 ```
 
-Si es necesario, añade tu usuario al grupo `dialout`:
+If necessary, add your user to the `dialout` group:
 
 ```bash
 sudo usermod -aG dialout "$USER"
 ```
 
-Después **cierra completamente la sesión de usuario y vuelve a entrar** para que el nuevo grupo tenga efecto.
+Then **log out completely and log back in** for the new group membership to take effect.
 
-Puedes comprobarlo con:
+You can verify it with:
 
 ```bash
 groups
@@ -455,45 +455,46 @@ groups
 
 ---
 
-## Configuración recomendada del IC-7300MK2
 
-Valores utilizados habitualmente con el proyecto:
+## Recommended IC-7300MK2 configuration
 
-| Parámetro | Valor |
+Values commonly used with the project:
+
+| Parameter | Value |
 |---|---:|
-| Velocidad CI-V | 115200 baud |
-| Dirección CI-V | 94h / 0x94 |
-| Conexión | USB |
-| Interfaz | Puerto CI-V correspondiente al IC-7300MK2 |
+| CI-V baud rate | 115200 baud |
+| CI-V address | 94h / 0x94 |
+| Connection | USB |
+| Interface | CI-V port corresponding to the IC-7300MK2 |
 
-El programa permite modificar estos parámetros desde la configuración de conexión si tu instalación utiliza otros valores.
+The application allows these parameters to be changed from the connection settings if your installation uses different values.
 
-Para el entrenador Morse mediante sidetone USB, asegúrate además de que la radio envía por USB el audio/beep necesario para escuchar el tono CW.
+For the Morse trainer using USB sidetone, also make sure the radio sends the required audio/beep through USB so the CW tone can be heard by the application.
 
 ---
 
-## Compilación desde terminal
+## Building from the terminal
 
-Clona el repositorio:
+Clone the repository:
 
 ```bash
-git clone <URL-DEL-REPOSITORIO>
+git clone <REPOSITORY-URL>
 cd Icom7300Mk2Control
 ```
 
-Configura el proyecto:
+Configure the project:
 
 ```bash
 cmake -S . -B build -G Ninja
 ```
 
-Compila:
+Build:
 
 ```bash
 cmake --build build -j
 ```
 
-Ejecuta:
+Run:
 
 ```bash
 ./build/Icom7300Mk2Control
@@ -501,45 +502,46 @@ Ejecuta:
 
 ---
 
-## Compilación con Qt Creator
 
-1. Abre Qt Creator.
-2. Selecciona **Open Project**.
-3. Abre `CMakeLists.txt`.
-4. Selecciona un kit Qt 6.4 o superior.
-5. Configura el proyecto.
-6. Compila.
-7. Ejecuta `Icom7300Mk2Control`.
+## Building with Qt Creator
+
+1. Open Qt Creator.
+2. Select **Open Project**.
+3. Open `CMakeLists.txt`.
+4. Select a Qt 6.4 or later kit.
+5. Configure the project.
+6. Build it.
+7. Run `Icom7300Mk2Control`.
 
 ---
 
-## Instalación local en Linux
+## Local installation on Linux
 
-El `CMakeLists.txt` incluye reglas de instalación para Linux.
+The `CMakeLists.txt` includes installation rules for Linux.
 
-Después de compilar:
+After building:
 
 ```bash
 cmake --install build --prefix "$HOME/.local"
 ```
 
-Esto instala:
+This installs:
 
-- ejecutable en `~/.local/bin`;
-- archivo `.desktop`;
-- iconos de diferentes tamaños.
+- the executable in `~/.local/bin`;
+- the `.desktop` file;
+- icons in different sizes.
 
-Comprueba que `~/.local/bin` forma parte de tu `PATH`.
+Make sure `~/.local/bin` is included in your `PATH`.
 
-También se incluye:
+The following script is also included:
 
 ```text
 install-linux-user.sh
 ```
 
-Este script instala el lanzador y los iconos para el usuario actual cuando el ejecutable ya se encuentra accesible desde el `PATH`.
+This script installs the launcher and icons for the current user when the executable is already accessible from the `PATH`.
 
-Uso:
+Usage:
 
 ```bash
 chmod +x install-linux-user.sh
@@ -548,7 +550,8 @@ chmod +x install-linux-user.sh
 
 ---
 
-## Estructura del proyecto
+
+## Project structure
 
 ```text
 Icom7300Mk2Control/
@@ -574,197 +577,206 @@ Icom7300Mk2Control/
 └── .gitignore
 ```
 
-### Archivos principales
+### Main files
 
 **`radiocontroller.cpp/.h`**  
-Comunicación serie, protocolo CI-V, sincronización, control de la radio, memorias, scope y medidores.
+Serial communication, CI-V protocol, synchronization, radio control, memories, scope and meters.
 
 **`Main.qml`**  
-Interfaz principal.
+Main interface.
 
 **`morsetrainer.cpp/.h`**  
-Generación y análisis Morse, audio, Koch/Farnsworth, puntuación y estadísticas.
+Morse generation and analysis, audio, Koch/Farnsworth, scoring and statistics.
 
 **`MorseTrainerWindow.qml`**  
-Interfaz del entrenador Morse.
+Morse trainer interface.
 
 ---
 
-## Uso básico
 
-1. Conecta el IC-7300MK2 por USB.
-2. Enciende la radio.
-3. Ejecuta el programa.
-4. Comprueba el indicador de conexión.
-5. Si no conecta automáticamente, abre la configuración CI-V y selecciona:
-   - puerto;
+## Basic usage
+
+1. Connect the IC-7300MK2 via USB.
+2. Turn on the radio.
+3. Run the application.
+4. Check the connection indicator.
+5. If it does not connect automatically, open the CI-V settings and select:
+   - port;
    - 115200 baud;
-   - dirección `0x94`.
-6. Cambia la frecuencia desde el programa o desde el dial de la radio y comprueba que ambos permanecen sincronizados.
+   - address `0x94`.
+6. Change the frequency from the application or from the radio's tuning dial and verify that both remain synchronized.
 
 ---
 
-## Solución de problemas
 
-### La radio no conecta
+## Troubleshooting
 
-Comprueba:
+### The radio does not connect
+
+Check:
 
 ```bash
 ls -l /dev/ttyACM*
 ls -l /dev/serial/by-id/
 ```
 
-Comprueba también:
+Also check:
 
-- que el cable USB esté conectado;
-- que ningún otro proceso tenga abierto el mismo puerto;
-- que el usuario pertenezca a `dialout`;
-- que CI-V esté configurado a la velocidad correcta;
-- que la dirección de radio sea `0x94` si utilizas los valores recomendados.
+- that the USB cable is connected;
+- that no other process has the same port open;
+- that the user belongs to `dialout`;
+- that CI-V is configured at the correct baud rate;
+- that the radio address is `0x94` when using the recommended values.
 
-Para localizar un proceso que tenga abierto un puerto:
+To find a process that has a port open:
 
 ```bash
 lsof /dev/ttyACM0
 lsof /dev/ttyACM1
 ```
 
-### La segunda ejecución no conecta
+### A second instance does not connect
 
-Las versiones actuales realizan un cierre explícito del puerto CI-V al salir.
+Current versions explicitly close the CI-V port on exit.
 
-Si sigue ocurriendo, comprueba que no haya quedado un proceso anterior:
+If the problem continues, check whether a previous process is still running:
 
 ```bash
 pgrep -a Icom7300Mk2Control
 ```
 
-### No se detecta el sidetone Morse
+### Morse sidetone is not detected
 
-Comprueba:
+Check:
 
-- dispositivo de audio USB seleccionado;
-- salida de audio USB configurada en la radio;
-- nivel de audio;
+- selected USB audio input device;
+- USB audio output configured on the radio;
+- audio level;
 - CW Pitch;
-- umbral de detección;
-- que el medidor de entrada del entrenador se mueva.
+- detection threshold;
+- that the trainer's input level meter is moving.
 
-En Linux también puedes revisar los dispositivos de audio desde PipeWire/PulseAudio.
+On Linux, you can also inspect audio devices through PipeWire/PulseAudio.
 
-### Los primeros símbolos de un ejercicio Morse se cortan
+### The first symbols of a Morse exercise are clipped
 
-La reproducción incorpora un periodo de silencio previo para permitir que PipeWire/PulseAudio/ALSA estabilice la salida antes del primer símbolo.
+Playback includes an initial silence period to allow PipeWire/PulseAudio/ALSA to stabilize the output before the first symbol.
 
-Si el problema persiste, revisa que el dispositivo de audio no esté siendo suspendido agresivamente por el sistema.
-
----
-
-## Uso simultáneo con otros programas
-
-El proyecto está pensado para poder convivir con aplicaciones de modos digitales cuando la configuración de puertos e interfaces USB lo permite.
-
-No intentes que dos procesos abran de forma exclusiva el **mismo dispositivo serie** al mismo tiempo. Si otro programa necesita control CI-V, utiliza la configuración de interfaces y puertos adecuada para evitar conflictos.
+If the problem persists, check that the audio device is not being aggressively suspended by the system.
 
 ---
 
-## Seguridad
 
-Este software puede modificar parámetros de un transceptor real y activar funciones relacionadas con transmisión.
+## Simultaneous use with other applications
 
-Antes de utilizarlo:
+The project is designed to coexist with digital-mode applications when the port and USB interface configuration allows it.
 
-- comprueba la potencia;
-- comprueba la carga o antena;
-- comprueba la frecuencia;
-- respeta la normativa aplicable;
-- no dependas únicamente de la interfaz gráfica para evitar una transmisión accidental.
-
-El desarrollador y los colaboradores no pueden garantizar el comportamiento de equipos, drivers, firmware o instalaciones externas al programa.
+Do not try to make two processes open the **same serial device** exclusively at the same time. If another application needs CI-V control, use the appropriate interface and port configuration to avoid conflicts.
 
 ---
+
+
+## Safety
+
+This software can modify parameters of a real transceiver and activate transmission-related functions.
+
+Before using it:
+
+- check the power level;
+- check the load or antenna;
+- check the frequency;
+- comply with applicable regulations;
+- do not rely solely on the graphical interface to prevent accidental transmission.
+
+The developer and contributors cannot guarantee the behavior of equipment, drivers, firmware or installations external to the application.
+
+---
+
 
 ## Roadmap
 
-Posibles líneas de desarrollo:
+Possible development directions:
 
-- Ampliación progresiva del control remoto web (scope/waterfall y audio remoto).
-- Audio remoto.
-- Adaptación completa a Windows.
-- Separación opcional del entrenador Morse como aplicación independiente.
-- Mejoras adicionales de scope/waterfall.
-- Nuevas funciones CI-V disponibles en el IC-7300MK2.
-- Más estadísticas y herramientas de aprendizaje Morse.
-
----
-
-## Contribuciones
-
-Las contribuciones, pruebas y reportes de errores son bienvenidos.
-
-Al informar de un problema, resulta útil incluir:
-
-- versión del programa;
-- distribución Linux;
-- versión de Qt;
-- firmware de la radio;
-- puerto utilizado;
-- velocidad CI-V;
-- pasos para reproducir el problema;
-- salida relevante del diagnóstico CI-V.
-
-Evita publicar números de serie, claves, contraseñas u otros identificadores privados en los informes.
+- Progressive expansion of web remote control (scope/waterfall and remote audio).
+- Remote audio.
+- Full Windows adaptation.
+- Optional separation of the Morse trainer as an independent application.
+- Additional scope/waterfall improvements.
+- New CI-V functions available on the IC-7300MK2.
+- More statistics and Morse learning tools.
 
 ---
 
-## Memorias en el control remoto
 
-Desde la versión **1.2.10**, la interfaz web incluye un gestor de las 99 memorias del IC-7300MK2 sin aumentar el tamaño del panel principal.
+## Contributions
 
-Funciones disponibles:
+Contributions, testing and bug reports are welcome.
 
-- lectura individual;
-- lectura secuencial de las 99 memorias;
-- resumen de canales leídos, ocupados y libres;
-- filtros: todas, ocupadas, libres y sin leer;
-- búsqueda por canal, nombre, frecuencia, modo o estado;
-- selección de memoria (`IR`);
-- copia de una memoria al VFO;
-- vuelta al VFO anterior;
-- cambio de nombre;
-- guardado del estado actual en una memoria;
-- borrado de memoria.
+When reporting an issue, it is useful to include:
 
-Las operaciones de escritura o borrado requieren confirmación en el navegador.
+- application version;
+- Linux distribution;
+- Qt version;
+- radio firmware version;
+- port used;
+- CI-V baud rate;
+- steps to reproduce the problem;
+- relevant CI-V diagnostic output.
+
+Avoid publishing serial numbers, keys, passwords or other private identifiers in reports.
+
+---
+
+
+## Memories in remote control
+
+Since version **1.2.10**, the web interface includes a manager for the IC-7300MK2's 99 memories without increasing the size of the main panel.
+
+Available functions:
+
+- individual memory reading;
+- sequential reading of all 99 memories;
+- summary of read, occupied and free channels;
+- filters: all, occupied, free and unread;
+- search by channel, name, frequency, mode or status;
+- memory selection (`IR`);
+- copy a memory to the VFO;
+- return to the previous VFO;
+- rename;
+- save the current state to a memory;
+- erase memory.
+
+Write or erase operations require confirmation in the browser.
 
 ## Releases
 
-Para versiones publicadas se recomienda utilizar **GitHub Releases** en lugar de almacenar ZIP de cada versión dentro del repositorio.
+For published versions, **GitHub Releases** are recommended instead of storing a ZIP file for each version inside the repository.
 
-Ejemplo:
+Example:
 
 ```text
 v1.2.12
 └── Icom7300Mk2Control_v1.2.12.zip
 ```
 
-El repositorio principal debería contener el código fuente de la versión actual.
+The main repository should contain the source code for the current version.
 
 ---
 
-## Licencia
 
-Antes de publicar el repositorio, añade un archivo `LICENSE` con la licencia elegida.
+## License
 
-Si deseas una licencia permisiva para software abierto, **MIT** es una opción habitual.
+Before publishing the repository, add a `LICENSE` file containing the chosen license.
+
+If you want a permissive open-source license, **MIT** is a common option.
 
 ---
 
-## Aviso sobre marcas
 
-**Icom** e **IC-7300MK2** son marcas o denominaciones pertenecientes a sus respectivos propietarios.
+## Trademark notice
 
-Este proyecto es independiente y no está afiliado, patrocinado ni respaldado oficialmente por Icom Inc.
+**Icom** and **IC-7300MK2** are trademarks or names belonging to their respective owners.
 
-> **v1.2.10:** corregida la pantalla de autenticación: la actualización periódica ya no borra la clave mientras se está escribiendo y `Enter` permite validarla.
+This project is independent and is not affiliated with, sponsored by or officially endorsed by Icom Inc.
+
+> **v1.2.10:** fixed the authentication screen: periodic updates no longer erase the key while it is being typed, and `Enter` can be used to validate it.
