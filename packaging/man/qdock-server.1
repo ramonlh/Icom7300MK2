@@ -1,0 +1,46 @@
+.TH QDOCK-SERVER 1 "September 2026" "0.1.0" "User Commands"
+.SH NAME
+qdock-server \- authenticated TCP server for Quansheng observations and controls
+.SH SYNOPSIS
+.B qdock-server
+.RI "--serial device | --replay file " [ options ]
+.SH DESCRIPTION
+Publishes JSON observations over TCP using the qdock-lan/1 protocol.
+Serial acquisition is shared among clients. Controls require explicit options.
+.SH OPTIONS
+.TP
+.B --help
+Show all supported options and their current defaults.
+.TP
+.BI "--serial " device
+Use the specified serial device; read-only unless an optional query/control is enabled.
+.TP
+.BI "--replay " file
+Replay a regular capture file without opening a serial device.
+.TP
+.BI "--seconds " number
+Limit serial acquisition duration (default 15 seconds, maximum 86400).
+.TP
+.BI "--listen " address
+Local listening address (default 127.0.0.1).
+.TP
+.BI "--port " number
+TCP port (default 8765).
+.TP
+.B --allow-ptt
+Allow momentary PTT for an authenticated, subscribed LAN client.
+.TP
+.BI "--ptt-max-seconds " number
+Maximum PTT duration, 1 to 180 seconds (default 60). Requires --allow-ptt.
+.SH ENVIRONMENT
+.TP
+.B QDOCK_LAN_TOKEN
+Required authentication token, 16 to 256 UTF-8 bytes.
+.SH NOTES
+PTT is released on lease expiry, owner disconnect or orderly shutdown.
+A broken serial link or forced process termination can prevent delivery of release.
+.SH SEE ALSO
+.BR qdock-server-gui (1),
+.BR qdock-probe (1)
+.PP
+.I /usr/share/doc/qdock-server/LAN_PROTOCOL.md

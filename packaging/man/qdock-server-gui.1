@@ -1,0 +1,22 @@
+.TH QDOCK-SERVER-GUI 1 "September 2026" "0.1.0" "User Commands"
+.SH NAME
+qdock-server-gui \- graphical launcher for the Quansheng LAN server
+.SH SYNOPSIS
+.B qdock-server-gui
+.SH DESCRIPTION
+Select a serial device, listening address, TCP port and optional capabilities,
+then start or stop qdock-server. PTT is disabled until explicitly selected.
+The window does not start acquisition automatically.
+.SH FILES
+.TP
+.I ~/.config/qdock/lan-token
+LAN token read before starting the server. Configure the same token in the client.
+This file is not created or overwritten by the package installer.
+.SH NOTES
+The GUI starts qdock-server from the same binary directory.
+Closing the GUI stops its server process.
+.SH SEE ALSO
+.BR qdock-server (1),
+.BR Icom7300Mk2Control (1)
+.PP
+.I /usr/share/doc/qdock-server/INSTALAR.md

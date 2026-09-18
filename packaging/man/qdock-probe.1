@@ -1,0 +1,35 @@
+.TH QDOCK-PROBE 1 "September 2026" "0.1.0" "User Commands"
+.SH NAME
+qdock-probe \- read-only Quansheng serial and capture diagnostic tool
+.SH SYNOPSIS
+.B qdock-probe
+.RI "--replay file | --port device | --list-ports " [ options ]
+.SH DESCRIPTION
+Decode Quansheng Dock frames from a capture or serial device.
+Prints events as JSON lines. Does not send radio commands.
+.SH OPTIONS
+.TP
+.B --help
+Show complete usage and options.
+.TP
+.B --list-ports
+List serial devices without opening them.
+.TP
+.BI "--port " device
+Listen on the specified serial port.
+.TP
+.BI "--seconds " number
+Duration of serial acquisition.
+.TP
+.BI "--capture " file
+Save raw incoming bytes to a new file, refusing to overwrite an existing capture.
+.TP
+.BI "--replay " file
+Decode a binary capture without radio access.
+.SH NOTES
+Close other programs using the serial port before acquisition.
+Candidate UI events are observations, not verified RF measurements.
+.SH SEE ALSO
+.BR qdock-server (1)
+.PP
+.I /usr/share/doc/qdock-server/README.md

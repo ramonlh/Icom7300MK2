@@ -666,6 +666,11 @@ Ejecuta:
 
 ---
 
+## Paquetes instaladores DEB
+
+Para Linux Mint 22 / Ubuntu 24.04 (amd64), consulta la [guía de instalación y empaquetado](packaging/INSTALAR.md).
+Ejecuta `python3 packaging/build-deb.py` para generar paquetes independientes de la aplicación principal y del servidor Quansheng.
+
 ## Instalación local en Linux
 
 El `CMakeLists.txt` incluye reglas de instalación para Linux.

@@ -664,6 +664,11 @@ Run:
 
 ---
 
+## Installable DEB packages
+
+For Linux Mint 22 / Ubuntu 24.04 (amd64), see the [installation and packaging guide](packaging/INSTALAR.md).
+Run `python3 packaging/build-deb.py` to build separate packages for the main application and the Quansheng server.
+
 ## Local installation on Linux
 
 The `CMakeLists.txt` includes installation rules for Linux.

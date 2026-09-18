@@ -1,0 +1,106 @@
+name: Publicar instaladores DEB
+
+on:
+  push:
+    tags:
+      - "debs-v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release existente a la que adjuntar instaladores (ej. v1.2.12)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publicar-deb-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Descargar código y etiquetas
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Comprobar la release y la identidad del código
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          release_tag="${REQUESTED_TAG:-${GITHUB_REF_NAME#debs-}}"
+          [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release view "$release_tag" --json url
+          git rev-parse "refs/tags/${release_tag}^{commit}"
+          changes="$(git diff --name-only "$release_tag" HEAD -- . \
+            ':!packaging' ':!README.md' ':!README.es.md' \
+            ':!.github/workflows/publicar-instaladores.yml')"
+          if [[ -n "$changes" ]]; then
+            echo "El código difiere de la release; no publicar binarios con otra versión."
+            echo "$changes"
+            exit 1
+          fi
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+
+      - name: Instalar dependencias de compilación
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ python3 binutils dpkg-dev desktop-file-utils \
+            qt6-base-dev qt6-declarative-dev qt6-serialport-dev qt6-multimedia-dev \
+            libgl1-mesa-dev libxkbcommon-dev
+
+      - name: Compilar y empaquetar
+        run: python3 packaging/build-deb.py --jobs 2
+
+      - name: Verificar paquetes y probe sin radio
+        run: |
+          cd build-packages/dist
+          sha256sum -c ./*.sha256
+          for package in ./*.deb; do
+            dpkg-deb --info "$package"
+            dpkg-deb --contents "$package"
+          done
+          apt-get --simulate install ./*.deb
+          cd ../..
+          python3 quansheng/tests/probe_test.py build-packages/quansheng/qdock-probe
+
+      - name: Adjuntar instaladores e instrucciones
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            build-packages/dist/*.deb \
+            build-packages/dist/*.deb.sha256 \
+            build-packages/dist/INSTALAR.md
+
+      - name: Añadir indicaciones a la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$RELEASE_TAG" --json body --jq .body > /tmp/release-body.md
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path('/tmp/release-body.md')
+          body = path.read_text()
+          if '## Instaladores Linux Mint / Ubuntu' not in body:
+              base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['RELEASE_TAG']}"
+              packages = sorted(Path('build-packages/dist').glob('*.deb'))
+              body += '\n\n## Instaladores Linux Mint / Ubuntu\n\n'
+              body += 'Para **Linux Mint 22.x / Ubuntu 24.04, amd64 (64 bits)**.\n\n'
+              for package in packages:
+                  role = 'HP principal: aplicación Icom y cliente Quansheng' if package.name.startswith('icom') else 'Pavilion: servidor Quansheng'
+                  body += f'- **{role}**: [{package.name}]({base}/{package.name}).\n'
+              body += f'\n[Instrucciones de instalación]({base}/INSTALAR.md). '
+              body += 'Cada paquete incluye su archivo SHA-256. Abrir el DEB con el instalador de Mint o usar `sudo apt install ./nombre-del-paquete.deb`.\n'
+              body += '\nSe conservan los ajustes personales. El servidor requiere configurar el token LAN; PTT se habilita expresamente. Los accesos antiguos pueden seguir apuntando a compilaciones locales: consultar las instrucciones.\n'
+              path.write_text(body)
+          PY
+          gh release edit "$RELEASE_TAG" --notes-file /tmp/release-body.md

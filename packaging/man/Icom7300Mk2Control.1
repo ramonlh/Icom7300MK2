@@ -1,0 +1,23 @@
+.TH ICOM7300MK2CONTROL 1 "September 2026" "1.2.12" "User Commands"
+.SH NAME
+Icom7300Mk2Control \- control an Icom IC-7300MK2 and a LAN Quansheng client
+.SH SYNOPSIS
+.B Icom7300Mk2Control
+.SH DESCRIPTION
+Qt 6 graphical application for radio control, meters, spectrum, memories
+and Morse training. Icom CI-V and Quansheng LAN connections are independent.
+Configure connections from the application. The Quansheng server runs on
+the computer physically connected to the UV-K5.
+.SH FILES
+.TP
+.I ~/.config/Icom7300Mk2/Icom7300Mk2Control.conf
+User preferences, preserved during package upgrades and removal.
+.SH NOTES
+Serial access requires the user's normal device permissions, usually membership
+of the dialout group. Run the application as your regular user.
+External programs such as DECODIUM, fldigi, QSSTV and JS8Call are installed separately.
+.SH SEE ALSO
+.BR qdock-server-gui (1),
+.BR qdock-server (1)
+.PP
+.I /usr/share/doc/icom7300mk2-control/INSTALAR.md
