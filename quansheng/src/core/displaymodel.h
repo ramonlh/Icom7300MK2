@@ -5,7 +5,7 @@
 
 namespace qdock {
 struct DisplayVfo {
-    std::string frequency, memory, name, mode, power;
+    std::string frequency, memory, name, mode, power, step;
     bool selected = false;
 };
 struct DisplayIndicators {

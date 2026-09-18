@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Servidor Quansheng UV-K5
+Comment=Servidor gráfico LAN para Quansheng UV-K5
+Exec=/home/ramon/qdock-readonly/build/qdock-server-gui
+Icon=network-server
+Terminal=false
+Categories=HamRadio;Network;
+StartupNotify=true

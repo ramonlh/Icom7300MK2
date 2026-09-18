@@ -3,10 +3,14 @@
 #include <QAbstractSocket>
 #include <QDateTime>
 #include <QJsonDocument>
+#include <QLocale>
+#include <QtMath>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QDebug>
 #include <QSettings>
+#include <QGuiApplication>
+#include <QUuid>
 #include <QTcpSocket>
 
 namespace {
@@ -32,6 +36,16 @@ QVariantList emptyHardwareRegisterRows()
 QuanshengClient::QuanshengClient(QObject *parent)
     : QObject(parent), m_socket(new QTcpSocket(this))
 {
+    m_pttTimer.setInterval(250);
+    connect(&m_pttTimer, &QTimer::timeout, this, [this] {
+        if (m_pttPressed && connected() && m_socket->bytesToWrite() == 0)
+            sendJson({{"message", "ptt"}, {"action", "keepalive"}, {"id", m_pttId}});
+    });
+    if (auto* app = qobject_cast<QGuiApplication*>(QCoreApplication::instance()))
+        connect(app, &QGuiApplication::applicationStateChanged, this,
+                [this](Qt::ApplicationState state) {
+            if (state != Qt::ApplicationActive) releasePtt();
+        });
     m_hardwareRegisterRows = emptyHardwareRegisterRows();
 
     QSettings settings;
@@ -50,19 +64,31 @@ QuanshengClient::QuanshengClient(QObject *parent)
 
     m_observationTimer.setInterval(1000);
     connect(&m_observationTimer, &QTimer::timeout, this, [this]() {
-        if (m_lastObservationAt.isEmpty())
-            return;
-        const QDateTime observed = QDateTime::fromString(
-            m_lastObservationAt, Qt::ISODateWithMs);
-        if (!observed.isValid())
-            return;
-        const int age = qMax(0, observed.secsTo(QDateTime::currentDateTimeUtc()));
-        const bool fresh = age <= 5 && connected();
-        if (age != m_observationAgeSeconds || fresh != m_observationFresh) {
-            m_observationAgeSeconds = age;
-            m_observationFresh = fresh;
-            emit stateChanged();
+        bool changed = false;
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+        if (!m_lastObservationAt.isEmpty()) {
+            const QDateTime observed = QDateTime::fromString(
+                m_lastObservationAt, Qt::ISODateWithMs);
+            if (observed.isValid()) {
+                const int age = qMax(0, observed.secsTo(now));
+                const bool fresh = age <= 5 && connected();
+                if (age != m_observationAgeSeconds || fresh != m_observationFresh) {
+                    m_observationAgeSeconds = age;
+                    m_observationFresh = fresh;
+                    changed = true;
+                }
+            }
         }
+        const int silence = connected() && m_lastEventReceivedAt.isValid()
+            ? qMax(0, m_lastEventReceivedAt.secsTo(now)) : -1;
+        const bool stalled = connected() && m_serialAvailable && silence >= 10;
+        if (silence != m_eventSilenceSeconds || stalled != m_eventStreamStalled) {
+            m_eventSilenceSeconds = silence;
+            m_eventStreamStalled = stalled;
+            changed = true;
+        }
+        if (changed)
+            emit stateChanged();
     });
     m_observationTimer.start();
 
@@ -143,6 +169,8 @@ void QuanshengClient::connectToServer()
 {
     if (m_shuttingDown)
         return;
+    releasePtt();
+    m_txControlAvailable = false;
     m_reconnectRequested = true;
     setError(QString());
     if (m_socket->state() != QAbstractSocket::UnconnectedState)
@@ -151,7 +179,19 @@ void QuanshengClient::connectToServer()
     m_sourceStatus = QStringLiteral("conectando");
     m_serialAvailable = false;
     m_eepromReadAvailable = false;
+    m_frequencyControlAvailable = false;
+    m_frequencyControlStatus = QStringLiteral("No disponible");
+    m_controlBusy = false;
+    m_controlOperation.clear();
+    m_pendingVfoModeTarget.clear();
+    m_pendingVfoModePreviousMemory.clear();
+    m_pendingRadioControl.clear();
+    m_dualWatchKnown = false;
+    m_squelchLevel = -1;
     m_eepromBusy = false;
+    m_lastEventReceivedAt = {};
+    m_eventSilenceSeconds = -1;
+    m_eventStreamStalled = false;
     m_frequencyText.clear();
     m_activeVfo.clear();
     m_batteryPercent = -1;
@@ -200,6 +240,8 @@ void QuanshengClient::shutdown()
 {
     if (m_shuttingDown)
         return;
+    releasePtt();
+    m_socket->flush();
     m_shuttingDown = true;
     m_reconnectRequested = false;
     m_reconnectTimer.stop();
@@ -214,15 +256,29 @@ void QuanshengClient::shutdown()
 
 void QuanshengClient::disconnectFromServer()
 {
+    releasePtt();
+    m_txControlAvailable = false;
     m_reconnectRequested = false;
     m_reconnectTimer.stop();
     if (m_socket->state() != QAbstractSocket::UnconnectedState)
         m_socket->disconnectFromHost();
     m_sourceStatus = QStringLiteral("desconectado");
     m_serialAvailable = false;
+    m_frequencyControlAvailable = false;
+    m_frequencyControlStatus = QStringLiteral("No disponible");
+    m_controlBusy = false;
+    m_controlOperation.clear();
+    m_pendingVfoModeTarget.clear();
+    m_pendingVfoModePreviousMemory.clear();
+    m_pendingRadioControl.clear();
+    m_dualWatchKnown = false;
+    m_squelchLevel = -1;
     m_eepromReadAvailable = false;
     m_eepromBusy = false;
     m_observationFresh = false;
+    m_lastEventReceivedAt = {};
+    m_eventSilenceSeconds = -1;
+    m_eventStreamStalled = false;
     emit stateChanged();
 }
 
@@ -246,6 +302,135 @@ void QuanshengClient::readEeprom()
     m_eepromSettingRows.clear();
     emit stateChanged();
     sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("read_eeprom")}});
+}
+
+void QuanshengClient::setFrequency(const QString &frequencyMHz)
+{
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy)
+        return;
+    bool ok = false;
+    const double mhz = QLocale::c().toDouble(frequencyMHz.trimmed(), &ok);
+    if (!ok || !qIsFinite(mhz) || mhz < 18.0 || mhz > 1300.0
+            || (mhz > 630.0 && mhz < 840.0)) {
+        m_frequencyControlStatus = QStringLiteral("Frecuencia no utilizable (18–1300 MHz; 630–840 MHz excluidos)");
+        emit stateChanged();
+        return;
+    }
+    const qint64 hz = qRound64(mhz * 1000000.0);
+    m_controlOperation = QStringLiteral("Frecuencia VFO %1 a %2 MHz")
+        .arg(m_activeVfo.isEmpty() ? QStringLiteral("—") : m_activeVfo,
+             frequencyMHz.trimmed());
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("set_frequency")},
+                         {QStringLiteral("frequencyHz"), hz}});
+}
+
+void QuanshengClient::switchVfo()
+{
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy)
+        return;
+    const QString destination = m_activeVfo == QStringLiteral("A")
+        ? QStringLiteral("B") : m_activeVfo == QStringLiteral("B")
+        ? QStringLiteral("A") : QStringLiteral("—");
+    m_controlOperation = QStringLiteral("Cambiar VFO %1 → %2")
+        .arg(m_activeVfo.isEmpty() ? QStringLiteral("—") : m_activeVfo, destination);
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("switch_vfo")} });
+}
+
+void QuanshengClient::toggleVfoMode(const QString &vfo)
+{
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy || (vfo != "A" && vfo != "B")) return;
+    QString &memory = vfo == QStringLiteral("A") ? m_vfoAMemory : m_vfoBMemory;
+    m_pendingVfoModeTarget = vfo;
+    m_pendingVfoModePreviousMemory = memory;
+    const bool wasMemory = memory == QStringLiteral("Memoria")
+        || memory.startsWith(QLatin1Char('M'));
+    // La tecla actúa inmediatamente en la radio, pero el firmware puede tardar
+    // varios segundos en volver a dibujar Mxxx/Fxxx. Reflejar provisionalmente
+    // el destino y sustituirlo cuando llegue la confirmación de pantalla.
+    memory = wasMemory ? QStringLiteral("VFO") : QStringLiteral("Memoria");
+    const QString destination = wasMemory ? QStringLiteral("VFO") : QStringLiteral("Memoria");
+    m_controlOperation = m_activeVfo == vfo
+        ? QStringLiteral("Cambiar VFO %1 a %2").arg(vfo, destination)
+        : QStringLiteral("Seleccionar VFO %1 y cambiar a %2").arg(vfo, destination);
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("toggle_vfo_mode")},
+                         {QStringLiteral("vfo"), vfo}});
+}
+
+void QuanshengClient::stepMemory(const QString &vfo, bool up)
+{
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy || (vfo != "A" && vfo != "B")) return;
+    const QString direction = up ? QStringLiteral("subir memoria")
+                                 : QStringLiteral("bajar memoria");
+    m_controlOperation = m_activeVfo == vfo
+        ? QStringLiteral("VFO %1: %2").arg(vfo, direction)
+        : QStringLiteral("Seleccionar VFO %1 y %2").arg(vfo, direction);
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("memory_step")},
+                         {QStringLiteral("vfo"), vfo},
+                         {QStringLiteral("direction"), up ? QStringLiteral("up") : QStringLiteral("down")} });
+}
+
+void QuanshengClient::setMode(const QString &vfo, const QString &mode)
+{
+    static const QStringList modes{QStringLiteral("FM"), QStringLiteral("AM"),
+        QStringLiteral("USB"), QStringLiteral("BYP"), QStringLiteral("RAW")};
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy
+        || (vfo != QStringLiteral("A") && vfo != QStringLiteral("B"))
+        || !modes.contains(mode))
+        return;
+    m_controlOperation = m_activeVfo == vfo
+        ? QStringLiteral("Modo %1 en VFO %2").arg(mode, vfo)
+        : QStringLiteral("Seleccionar VFO %1 y aplicar modo %2").arg(vfo, mode);
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("set_mode")},
+                         {QStringLiteral("vfo"), vfo}, {QStringLiteral("mode"), mode}});
+}
+
+void QuanshengClient::setDualWatch(bool enabled)
+{
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy
+        || (m_dualWatchKnown && m_dualWatch == enabled))
+        return;
+    m_pendingRadioControl = QStringLiteral("dual_watch");
+    m_pendingDualWatchPrevious = m_dualWatch;
+    m_dualWatch = enabled;
+    m_dualWatchKnown = true;
+    m_controlOperation = enabled ? QStringLiteral("Activar Dual Watch")
+                                 : QStringLiteral("Desactivar Dual Watch");
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("set_dual_watch")},
+                         {QStringLiteral("enabled"), enabled}});
+}
+
+void QuanshengClient::setSquelch(int level)
+{
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy
+        || level < 0 || level > 9 || m_squelchLevel == level)
+        return;
+    m_pendingRadioControl = QStringLiteral("squelch");
+    m_pendingSquelchPrevious = m_squelchLevel;
+    m_squelchLevel = level;
+    m_controlOperation = QStringLiteral("Ajustar squelch a %1").arg(level);
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("set_squelch")},
+                         {QStringLiteral("level"), level}});
 }
 
 void QuanshengClient::onConnected()
@@ -279,7 +464,10 @@ void QuanshengClient::onSocketError(QAbstractSocket::SocketError)
     if (m_shuttingDown)
         return;
     qWarning().noquote() << "Quansheng LAN error:" << m_socket->errorString();
-    setError(m_socket->errorString());
+    // El servidor envía primero un mensaje JSON con el motivo preciso y cierra
+    // después el socket. No ocultar ese diagnóstico con RemoteHostClosedError.
+    if (m_error.isEmpty())
+        setError(m_socket->errorString());
     m_sourceStatus = QStringLiteral("error");
     emit stateChanged();
 }
@@ -288,11 +476,26 @@ void QuanshengClient::onDisconnected()
 {
     if (m_shuttingDown)
         return;
+    m_pttTimer.stop();
+    m_pttPressed = false;
+    m_pttId.clear();
+    m_txControlAvailable = false;
+    m_pttStatus = QStringLiteral("PTT desconectado");
     qInfo() << "Quansheng LAN desconectado";
     emit connectedChanged();
     m_sourceStatus = QStringLiteral("desconectado");
     m_serialAvailable = false;
+    m_controlBusy = false;
+    m_controlOperation.clear();
+    m_pendingVfoModeTarget.clear();
+    m_pendingVfoModePreviousMemory.clear();
+    m_pendingRadioControl.clear();
+    m_dualWatchKnown = false;
+    m_squelchLevel = -1;
     m_observationFresh = false;
+    m_lastEventReceivedAt = {};
+    m_eventSilenceSeconds = -1;
+    m_eventStreamStalled = false;
     emit stateChanged();
     if (m_reconnectRequested && m_autoReconnect && !m_reconnectTimer.isActive())
         m_reconnectTimer.start();
@@ -302,7 +505,14 @@ void QuanshengClient::sendJson(const QJsonObject &object)
 {
     if (m_socket->state() == QAbstractSocket::ConnectedState) {
         const QByteArray payload = QJsonDocument(object).toJson(QJsonDocument::Compact);
-        qInfo().noquote() << "Quansheng LAN TX:" << payload;
+        QJsonObject loggedObject = object;
+        if (loggedObject.value(QStringLiteral("message")).toString()
+            == QStringLiteral("hello"))
+            loggedObject.insert(QStringLiteral("token"), QStringLiteral("<oculto>"));
+        if (object.value("action") != "keepalive") {
+            qInfo().noquote() << "Quansheng LAN TX:"
+                              << QJsonDocument(loggedObject).toJson(QJsonDocument::Compact);
+        }
         m_socket->write(payload);
         m_socket->write("\n");
     }
@@ -320,18 +530,57 @@ void QuanshengClient::processLine(const QByteArray &line)
 
     const QJsonObject object = document.object();
     const QString message = object.value(QStringLiteral("message")).toString();
+    if (message == QStringLiteral("display_state")
+        && object.value(QStringLiteral("squelchLevel")).isDouble()) {
+        const int level = object.value(QStringLiteral("squelchLevel")).toInt(-1);
+        if (level >= 0 && level <= 9)
+            m_squelchLevel = level;
+    }
+    if (message == QStringLiteral("display_state")
+        && m_frequencyControlStatus.contains(QStringLiteral("esperando radio"), Qt::CaseInsensitive)) {
+        m_frequencyControlStatus = (m_controlOperation.isEmpty()
+            ? QStringLiteral("Operación") : m_controlOperation)
+            + QStringLiteral(" · recibido de la radio");
+        m_controlOperation.clear();
+    }
     if (message == QStringLiteral("welcome")) {
         qInfo() << "Quansheng LAN welcome recibido";
         m_serialAvailable = object.value(QStringLiteral("serialAvailable")).toBool();
         m_txControlAvailable = object.value(QStringLiteral("txControlAvailable")).toBool();
+        m_pttStatus = m_txControlAvailable ? QStringLiteral("PTT disponible")
+                                         : QStringLiteral("PTT no habilitado en servidor");
         m_eepromReadAvailable = object.value(QStringLiteral("eepromReadAvailable")).toBool();
+        m_frequencyControlAvailable = object.value(QStringLiteral("frequencyControlAvailable")).toBool();
+        m_frequencyControlStatus = m_frequencyControlAvailable ? QStringLiteral("Disponible") : QStringLiteral("No disponible");
         m_sourceStatus = object.value(QStringLiteral("source")).toString();
+        m_lastEventReceivedAt = QDateTime::currentDateTimeUtc();
+        m_eventSilenceSeconds = 0;
+        m_eventStreamStalled = false;
         emit stateChanged();
         QJsonObject subscribe;
         subscribe.insert(QStringLiteral("message"), QStringLiteral("subscribe"));
         sendJson(subscribe);
+    } else if (message == QStringLiteral("ptt_state") || message == QStringLiteral("ptt_status")) {
+        if (object.value("id").toString() != m_pttId || m_pttId.isEmpty()) return;
+        const bool active = message == "ptt_state" && object.value("active").toBool();
+        if (!active) {
+            m_pttTimer.stop();
+            m_pttPressed = false;
+            m_pttId.clear();
+        }
+        const QString error = object.value("error").toString();
+        const QString reason = object.value("reason").toString();
+        if (!error.isEmpty()) m_pttStatus = QStringLiteral("Error PTT: %1").arg(error);
+        else if (active) m_pttStatus = QStringLiteral("PTT enviado · TX según radio");
+        else if (reason == "released") m_pttStatus = QStringLiteral("PTT liberado");
+        else m_pttStatus = QStringLiteral("PTT detenido: %1").arg(reason);
+        emit stateChanged();
     } else if (message == QStringLiteral("source_status")) {
         m_sourceStatus = object.value(QStringLiteral("status")).toString();
+        if (m_sourceStatus != "listening") {
+            releasePtt();
+            m_txControlAvailable = false;
+        }
         if (object.contains(QStringLiteral("error")))
             setError(object.value(QStringLiteral("error")).toString());
         emit stateChanged();
@@ -349,11 +598,53 @@ void QuanshengClient::processLine(const QByteArray &line)
         else
             m_eepromStatus = QStringLiteral("Iniciando sesión EEPROM…");
         emit stateChanged();
+    } else if (message == QStringLiteral("frequency_status") || message == QStringLiteral("vfo_status")) {
+        const QString status = object.value(QStringLiteral("status")).toString();
+        const bool vfo = message == QStringLiteral("vfo_status");
+        if (status == QStringLiteral("starting") || status == QStringLiteral("sent"))
+            m_controlBusy = true;
+        else if (status == QStringLiteral("complete") || status == QStringLiteral("error"))
+            m_controlBusy = false;
+        if (status == QStringLiteral("starting"))
+            m_frequencyControlStatus = (m_controlOperation.isEmpty()
+                ? (vfo ? QStringLiteral("Operación de VFO") : QStringLiteral("Cambio de frecuencia"))
+                : m_controlOperation) + QStringLiteral("…");
+        else if (status == QStringLiteral("sent"))
+            m_frequencyControlStatus = QStringLiteral("%1 · enviando (%2 tramas restantes)…")
+                .arg(m_controlOperation.isEmpty() ? QStringLiteral("Operación") : m_controlOperation)
+                .arg(object.value(QStringLiteral("framesRemaining")).toInt());
+        else if (status == QStringLiteral("complete"))
+            m_frequencyControlStatus = QStringLiteral("%1 · completado; esperando radio")
+                .arg(m_controlOperation.isEmpty() ? QStringLiteral("Operación") : m_controlOperation);
+        else if (status == QStringLiteral("error"))
+            m_frequencyControlStatus = QStringLiteral("%1 · error: %2")
+                .arg(m_controlOperation.isEmpty() ? QStringLiteral("Operación") : m_controlOperation,
+                     object.value(QStringLiteral("error")).toString());
+        if (status == QStringLiteral("error") && !m_pendingVfoModeTarget.isEmpty()) {
+            QString &memory = m_pendingVfoModeTarget == QStringLiteral("A")
+                ? m_vfoAMemory : m_vfoBMemory;
+            memory = m_pendingVfoModePreviousMemory;
+            m_pendingVfoModeTarget.clear();
+            m_pendingVfoModePreviousMemory.clear();
+        }
+        if (status == QStringLiteral("error") && m_pendingRadioControl == QStringLiteral("dual_watch")) {
+            m_dualWatch = m_pendingDualWatchPrevious;
+            m_pendingRadioControl.clear();
+        } else if (status == QStringLiteral("error") && m_pendingRadioControl == QStringLiteral("squelch")) {
+            m_squelchLevel = m_pendingSquelchPrevious;
+            m_pendingRadioControl.clear();
+        }
+        emit stateChanged();
     } else if (message == QStringLiteral("eeprom_dump")) {
         m_eepromChannelRows = object.value(QStringLiteral("channels")).toArray().toVariantList();
         m_eepromSettingRows = object.value(QStringLiteral("settings")).toArray().toVariantList();
         const QByteArray data = QByteArray::fromBase64(
             object.value(QStringLiteral("dataBase64")).toString().toLatin1());
+        if (data.size() > 0x0e71) {
+            const int level = static_cast<uchar>(data.at(0x0e71));
+            if (level >= 0 && level <= 9)
+                m_squelchLevel = level;
+        }
         QStringList lines;
         for (int offset = 0; offset < data.size(); offset += 16) {
             const QByteArray block = data.mid(offset, 16);
@@ -371,8 +662,18 @@ void QuanshengClient::processLine(const QByteArray &line)
         }
         m_eepromHexDump = lines.join(QLatin1Char('\n'));
         emit stateChanged();
+    } else if (message == QStringLiteral("radio_settings")) {
+        if (object.value(QStringLiteral("squelchLevel")).isDouble()) {
+            const int level = object.value(QStringLiteral("squelchLevel")).toInt(-1);
+            if (level >= 0 && level <= 9)
+                m_squelchLevel = level;
+        }
+        emit stateChanged();
     } else if (message == QStringLiteral("event")) {
         const QJsonObject event = object.value(QStringLiteral("event")).toObject();
+        m_lastEventReceivedAt = QDateTime::currentDateTimeUtc();
+        m_eventSilenceSeconds = 0;
+        m_eventStreamStalled = false;
         ++m_eventCount;
         if (event.contains(QStringLiteral("state"))) {
             m_candidateState = event.value(QStringLiteral("state")).toString();
@@ -708,6 +1009,17 @@ void QuanshengClient::processLine(const QByteArray &line)
         const QJsonObject a = object.value(QStringLiteral("vfoA")).toObject();
         const QJsonObject b = object.value(QStringLiteral("vfoB")).toObject();
         const QJsonObject indicators = object.value(QStringLiteral("indicators")).toObject();
+        m_charging = indicators.value(QStringLiteral("charging")).toBool();
+        if (indicators.contains(QStringLiteral("dualWatch"))) {
+            const bool observedDualWatch = indicators.value(QStringLiteral("dualWatch")).toBool();
+            if (m_pendingRadioControl != QStringLiteral("dual_watch")
+                || observedDualWatch != m_pendingDualWatchPrevious) {
+                m_dualWatch = observedDualWatch;
+                m_dualWatchKnown = true;
+                if (m_pendingRadioControl == QStringLiteral("dual_watch"))
+                    m_pendingRadioControl.clear();
+            }
+        }
         const auto updateIfPresent = [](QString &target, const QJsonObject &source,
                                         const QString &key) {
             const QString value = source.value(key).toString();
@@ -719,14 +1031,32 @@ void QuanshengClient::processLine(const QByteArray &line)
             m_activeVfo = active;
         updateIfPresent(m_vfoAFrequencyText, a, QStringLiteral("frequencyText"));
         updateIfPresent(m_vfoBFrequencyText, b, QStringLiteral("frequencyText"));
-        updateIfPresent(m_vfoAMemory, a, QStringLiteral("memory"));
-        updateIfPresent(m_vfoBMemory, b, QStringLiteral("memory"));
+        const auto updateMemory = [this](QString &target, const QJsonObject &source,
+                                         const QString &vfo) {
+            const QString value = source.value(QStringLiteral("memory")).toString();
+            if (value.isEmpty())
+                return;
+            // Durante el redibujado pueden llegar restos del modo anterior.
+            // Mantener el estado provisional hasta observar un valor distinto.
+            if (m_pendingVfoModeTarget == vfo
+                && value == m_pendingVfoModePreviousMemory)
+                return;
+            target = value;
+            if (m_pendingVfoModeTarget == vfo) {
+                m_pendingVfoModeTarget.clear();
+                m_pendingVfoModePreviousMemory.clear();
+            }
+        };
+        updateMemory(m_vfoAMemory, a, QStringLiteral("A"));
+        updateMemory(m_vfoBMemory, b, QStringLiteral("B"));
         updateIfPresent(m_vfoAName, a, QStringLiteral("name"));
         updateIfPresent(m_vfoBName, b, QStringLiteral("name"));
         updateIfPresent(m_vfoAMode, a, QStringLiteral("mode"));
         updateIfPresent(m_vfoBMode, b, QStringLiteral("mode"));
         updateIfPresent(m_vfoAPower, a, QStringLiteral("power"));
         updateIfPresent(m_vfoBPower, b, QStringLiteral("power"));
+        updateIfPresent(m_vfoAStep, a, QStringLiteral("step"));
+        updateIfPresent(m_vfoBStep, b, QStringLiteral("step"));
         const int batteryPercent = indicators.value(QStringLiteral("batteryPercent")).toInt(-1);
         if (batteryPercent >= 0) m_batteryPercent = batteryPercent;
         if (indicators.contains(QStringLiteral("signalLevel"))) {
@@ -754,7 +1084,6 @@ void QuanshengClient::processLine(const QByteArray &line)
         addFlag("vox", QStringLiteral("VOX"));
         addFlag("locked", QStringLiteral("LOCK"));
         addFlag("function", QStringLiteral("F"));
-        addFlag("charging", QStringLiteral("CARGA"));
         const QString statusCode = indicators.value(QStringLiteral("statusCode")).toString();
         if (!statusCode.isEmpty()) activeIndicators.append(statusCode);
         m_indicatorsText = activeIndicators.join(QStringLiteral(" · "));
@@ -780,4 +1109,26 @@ void QuanshengClient::setError(const QString &error)
         return;
     m_error = error;
     emit errorChanged();
+}
+
+void QuanshengClient::pressPtt()
+{
+    if (m_shuttingDown || m_pttPressed || !connected() || !m_txControlAvailable
+        || m_sourceStatus != "listening" || m_controlBusy || m_eepromBusy) return;
+    m_pttId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_pttPressed = true;
+    m_pttStatus = QStringLiteral("Solicitando PTT…");
+    sendJson({{"message", "ptt"}, {"action", "press"}, {"id", m_pttId}});
+    m_pttTimer.start();
+    emit stateChanged();
+}
+
+void QuanshengClient::releasePtt()
+{
+    m_pttTimer.stop();
+    if (!m_pttPressed) return;
+    m_pttPressed = false;
+    sendJson({{"message", "ptt"}, {"action", "release"}, {"id", m_pttId}});
+    m_pttStatus = QStringLiteral("Solicitando liberar PTT…");
+    emit stateChanged();
 }

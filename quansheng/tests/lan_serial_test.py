@@ -22,12 +22,15 @@ env = dict(os.environ, QDOCK_LAN_TOKEN=token)
 
 
 @contextmanager
-def server(device, seconds=10, capture=None, fail_writes=False, allow_eeprom=False):
+def server(device, seconds=10, capture=None, fail_writes=False, allow_eeprom=False,
+           allow_frequency=False):
     args = [exe, '--serial', device, '--seconds', str(seconds), '--port', '0']
     if capture is not None:
         args += ['--capture', str(capture)]
     if allow_eeprom:
         args += ['--allow-eeprom-query']
+    if allow_frequency:
+        args += ['--allow-frequency-control']
     def limit_file_writes():
         signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
     proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -131,6 +134,53 @@ finally:
         os.close(master)
     os.close(slave)
 
+# Active memory navigation is opt-in and must not close the LAN connection.
+master, slave = pty.openpty()
+try:
+    with server(os.ttyname(slave), allow_frequency=True) as (proc, port):
+        with client(port) as (sock, stream, _):
+            sock.sendall(b'{"message":"memory_step","vfo":"A","direction":"up"}\n')
+            assert until(stream, 'vfo_status')['status'] == 'starting'
+            expected_keys = [15, 19, 2, 19, 11, 19]
+            for expected in expected_keys:
+                assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
+            assert until(stream, 'vfo_status')['status'] in ('sent', 'complete')
+            while True:
+                status = until(stream, 'vfo_status')
+                if status['status'] == 'complete':
+                    break
+            sock.sendall(b'{"message":"set_mode","vfo":"A","mode":"RAW"}\n')
+            assert until(stream, 'vfo_status')['status'] == 'starting'
+            expected_mode_keys = [15, 19, 2, 19,
+                                  10, 19, 1, 19, 3, 19, 10, 19,
+                                  4, 19, 10, 19, 13, 19]
+            for expected in expected_mode_keys:
+                assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
+            while True:
+                status = until(stream, 'vfo_status')
+                if status['status'] == 'complete':
+                    break
+            sock.sendall(b'{"message":"set_dual_watch","enabled":true}\n')
+            assert until(stream, 'vfo_status')['status'] == 'starting'
+            for expected in [10, 19, 5, 19, 9, 19, 10, 19,
+                             1, 19, 10, 19, 13, 19]:
+                assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
+            while until(stream, 'vfo_status')['status'] != 'complete':
+                pass
+            sock.sendall(b'{"message":"set_squelch","level":7}\n')
+            assert until(stream, 'vfo_status')['status'] == 'starting'
+            for expected in [10, 19, 6, 19, 1, 19, 10, 19,
+                             7, 19, 10, 19, 13, 19]:
+                assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
+            while until(stream, 'vfo_status')['status'] != 'complete':
+                pass
+            assert proc.poll() is None, 'memory step killed LAN service'
+            sock.sendall(b'{"message":"ping"}\n')
+            assert until(stream, 'pong')['message'] == 'pong'
+finally:
+    os.close(master)
+    os.close(slave)
+
 # Duration closes the serial port; incomplete bytes remain visible in final stats.
 master, slave = pty.openpty()
 try:
@@ -152,7 +202,36 @@ finally:
     os.close(master)
     os.close(slave)
 
-# Explicitly enabled EEPROM reads use Hello + 64 ReadEeprom blocks and never write EEPROM.
+# The enabled EEPROM mode first reads only the block containing the squelch level
+# and retains it for clients that connect afterwards.
+master, slave = pty.openpty()
+try:
+    with server(os.ttyname(slave), seconds=10, allow_eeprom=True) as (_, port):
+        hello = read_serial_frame(master)
+        assert hello == bytes.fromhex('14 05 04 00 78 56 34 12')
+        os.write(master, radio_reply(bytes.fromhex('15 05 04 00 54 45 53 54')))
+        request = read_serial_frame(master)
+        assert request[:4] == bytes.fromhex('1b 05 08 00')
+        assert int.from_bytes(request[4:6], 'little') == 0x0e00
+        assert request[6:8] == bytes((128, 0))
+        block = bytearray(128)
+        block[0x71] = 7
+        payload = (bytes.fromhex('1c 05') + (132).to_bytes(2, 'little')
+                   + (0x0e00).to_bytes(2, 'little') + bytes((128, 0)) + block)
+        os.write(master, radio_reply(payload))
+        time.sleep(0.1)
+        with client(port) as (sock, stream, _):
+            sock.sendall(b'{"message":"subscribe"}\n')
+            messages = [json.loads(stream.readline()), json.loads(stream.readline())]
+            display = next(message for message in messages
+                           if message['message'] == 'display_state')
+            assert display['squelchLevel'] == 7
+        assert not select.select([master], [], [], 0)[0], 'unexpected extra serial output'
+finally:
+    os.close(master)
+    os.close(slave)
+
+# Explicitly requested full EEPROM reads use Hello + 64 ReadEeprom blocks and never write EEPROM.
 master, slave = pty.openpty()
 try:
     with server(os.ttyname(slave), seconds=10, allow_eeprom=True) as (_, port):

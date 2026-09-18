@@ -80,6 +80,11 @@ if(ICOM_BUILD_TESTS)
     target_include_directories(lan_receiver_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(lan_receiver_test PRIVATE Qt6::Quick Qt6::SerialPort)
     add_test(NAME lan_receiver COMMAND lan_receiver_test)
+    add_executable(quansheng_ptt_client_test
+        tests/quansheng_ptt_client_test.cpp quanshengclient.cpp quanshengclient.h)
+    target_include_directories(quansheng_ptt_client_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(quansheng_ptt_client_test PRIVATE Qt6::Quick Qt6::Network)
+    add_test(NAME quansheng_ptt_client COMMAND quansheng_ptt_client_test)
 endif()
 
 

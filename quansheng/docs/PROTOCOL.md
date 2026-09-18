@@ -219,3 +219,18 @@ esta captura como regresión, sin eliminar caracteres o tramas válidas.
 Archivos temporales originales: `/tmp/qdock-screen-20260910.raw` y
 `/tmp/qdock-screen-20260910.jsonl`. La frecuencia `110.937` y el fragmento `50`
 son elementos separados de pantalla; aún no se reconstruye su valor combinado.
+
+## PTT normal experimental
+
+Ampliación solicitada expresamente el 17 de septiembre de 2026. Reutiliza el
+constructor KeyPress `0x0801`, parámetros LE16: 16 pulsar, 19 liberar. Payloads
+claros `01 08 02 00 10 00` y `01 08 02 00 13 00`, respectivamente, con el XOR y
+CRC de comandos ya implementados. Referencia local QuanshengDock commit
+`103acd3f83ae0d920abfd38e0cd1ef242a9b8451`, `UI/MouseActions.cs` (PTT normal) y
+`Serial/PTT.cs` (repetición cada 50 ms). No utiliza EnterHardwareMode, GPIO ni
+escritura de registros. Las pruebas PTY verifican bytes y CRC independientes;
+el usuario confirmó el 18 de septiembre de 2026 la activación rápida de TX al
+pulsar PTT y su desactivación rápida al soltar. No se midió latencia ni se
+confirmaron físicamente los casos de caducidad/desconexión.
+El contrato de permiso, propietario,
+renovación y liberación está en `LAN_PROTOCOL.md`.

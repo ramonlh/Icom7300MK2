@@ -8,8 +8,28 @@ Contexto y reglas:
 - `AGENTS.md`
 
 Primera versión: `qdock-probe` de consola, sin GUI, con parser independiente de Qt.
-`qdock-probe` y `qdock-server` no envían bytes a la radio: no implementan
-handshake, cambio de frecuencia, teclas, PTT, escritura EEPROM ni firmware.
+`qdock-probe` no envía bytes a la radio. `qdock-server` mantiene ese comportamiento
+sin opciones adicionales; sus consultas, controles de teclado y PTT son
+experimentales y requieren habilitación explícita. No escribe EEPROM directamente
+ni flashea firmware.
+
+## PTT momentáneo
+
+En el servidor gráfico del Pavilion, marcar **Permitir PTT** antes de iniciar.
+Por consola, añadir `--allow-ptt` al comando del servidor serie. Después conectar
+el cliente y mantener pulsado **PTT** en el panel Quansheng; soltar para liberar.
+El servidor necesita haber recibido un estado reciente de radio.
+
+Libera al perder conexión/mantenimiento (1500 ms), al cerrar y al alcanzar
+60 s por pulsación. El máximo puede configurarse con `--ptt-max-seconds N`
+(1–180). PTT permanece desactivado por defecto y el lanzador de telemetría no
+lo activa automáticamente. El botón distingue PTT solicitado del estado TX
+observado. Pruebas offline disponibles en `lan-ptt`. El usuario confirmó el
+18 de septiembre de 2026 la activación rápida de TX al pulsar y su desactivación
+rápida al soltar, con el servidor actualizado en el Pavilion. Los casos de
+caducidad y desconexión siguen validados únicamente offline.
+Los fallos de cable/USB o la terminación forzada del servidor pueden impedir
+entregar la orden de liberación. Véase `docs/LAN_PROTOCOL.md`.
 
 ## Compilar y probar sin radio
 

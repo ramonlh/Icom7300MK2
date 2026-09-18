@@ -133,6 +133,8 @@ bool DisplayModel::apply(const Event& event) {
     if (text.size() >= 3 && text.size() <= 12
         && text.compare(text.size() - 3, 3, "kHz") == 0) {
         indicators_.step = text;
+        if (line >= 1 && line <= 3) a_.step = text;
+        else if (line >= 5 && line <= 7) b_.step = text;
         changed = true;
     }
     if (line == 1 && event.val1 == 123 && text.size() == 1) {
@@ -154,7 +156,14 @@ bool DisplayModel::apply(const Event& event) {
         else if (line == 2 && event.val1 == 2 && text.size() <= 4) a_.memory = text, changed = true;
         else if (line == 1 && event.val1 == 36) a_.name = text, changed = true;
         else if (line == 2 && event.val1 == 152 && validMode(text)) a_.mode = text, changed = true;
-        else if (line == 2 && event.val1 == 174) a_.power = text, changed = true;
+        else if (line == 2 && event.val1 == 152
+                 && (text == "CT" || text == "DCS" || text == "DCR"))
+            a_.mode = "FM", changed = true;
+        else if (line == 2 && event.val1 == 174) {
+            a_.power = text;
+            if (a_.mode.empty()) a_.mode = "FM";
+            changed = true;
+        }
     } else if (line >= 5 && line <= 7) {
         if (line == 5 && event.val1 == 32 && validFrequency(text)) bFrequencyMain_ = text, updateBfrequency(), changed = true;
         else if (line == 6 && event.val1 == 113 && text.size() <= 3
@@ -164,7 +173,14 @@ bool DisplayModel::apply(const Event& event) {
         else if (line == 6 && event.val1 == 2 && text.size() <= 4) b_.memory = text, changed = true;
         else if (line == 5 && event.val1 == 36) b_.name = text, changed = true;
         else if (line == 6 && event.val1 == 152 && validMode(text)) b_.mode = text, changed = true;
-        else if (line == 6 && event.val1 == 174) b_.power = text, changed = true;
+        else if (line == 6 && event.val1 == 152
+                 && (text == "CT" || text == "DCS" || text == "DCR"))
+            b_.mode = "FM", changed = true;
+        else if (line == 6 && event.val1 == 174) {
+            b_.power = text;
+            if (b_.mode.empty()) b_.mode = "FM";
+            changed = true;
+        }
     }
     return changed;
 }

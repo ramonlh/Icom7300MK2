@@ -154,6 +154,7 @@ ApplicationLauncher::ApplicationLauncher(QObject *parent)
     m_lanUser = settings.value("lan/user", m_lanUser).toString();
     m_lanPassword = settings.value("lan/password", m_lanPassword).toString();
     m_lanConnectionEnabled = settings.value("connection/type", settings.value("lan/enabled", false).toBool() ? 1 : 0).toInt() == 1;
+    m_lastRadioTab = std::clamp(settings.value(QStringLiteral("ui/lastRadioTab"), 0).toInt(), 0, 1);
     m_decodiumProcess->setStandardOutputFile(QProcess::nullDevice());
     m_decodiumProcess->setStandardErrorFile(QProcess::nullDevice());
     connect(m_decodiumProcess, &QProcess::started,
@@ -1822,6 +1823,21 @@ void ApplicationLauncher::setCompactAlwaysOnTop(bool value)
 QString ApplicationLauncher::status() const
 {
     return m_status;
+}
+
+int ApplicationLauncher::lastRadioTab() const
+{
+    return m_lastRadioTab;
+}
+
+void ApplicationLauncher::setLastRadioTab(int value)
+{
+    value = std::clamp(value, 0, 1);
+    if (value == m_lastRadioTab)
+        return;
+    m_lastRadioTab = value;
+    QSettings().setValue(QStringLiteral("ui/lastRadioTab"), value);
+    emit lastRadioTabChanged();
 }
 
 bool ApplicationLauncher::decodiumRunning() const

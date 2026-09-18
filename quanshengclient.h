@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QAbstractSocket>
 #include <QByteArray>
+#include <QDateTime>
 #include <QJsonObject>
 #include <QString>
 #include <QTcpSocket>
@@ -21,8 +22,13 @@ class QuanshengClient final : public QObject
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
     Q_PROPERTY(QString sourceStatus READ sourceStatus NOTIFY stateChanged)
     Q_PROPERTY(bool serialAvailable READ serialAvailable NOTIFY stateChanged)
+    Q_PROPERTY(bool pttPressed READ pttPressed NOTIFY stateChanged)
+    Q_PROPERTY(QString pttStatus READ pttStatus NOTIFY stateChanged)
     Q_PROPERTY(bool txControlAvailable READ txControlAvailable NOTIFY stateChanged)
     Q_PROPERTY(bool eepromReadAvailable READ eepromReadAvailable NOTIFY stateChanged)
+    Q_PROPERTY(bool frequencyControlAvailable READ frequencyControlAvailable NOTIFY stateChanged)
+    Q_PROPERTY(QString frequencyControlStatus READ frequencyControlStatus NOTIFY stateChanged)
+    Q_PROPERTY(bool controlBusy READ controlBusy NOTIFY stateChanged)
     Q_PROPERTY(bool eepromBusy READ eepromBusy NOTIFY stateChanged)
     Q_PROPERTY(QString eepromStatus READ eepromStatus NOTIFY stateChanged)
     Q_PROPERTY(QString eepromHexDump READ eepromHexDump NOTIFY stateChanged)
@@ -58,6 +64,10 @@ class QuanshengClient final : public QObject
     Q_PROPERTY(QString stepText READ stepText NOTIFY stateChanged)
     Q_PROPERTY(QString toneIndicator READ toneIndicator NOTIFY stateChanged)
     Q_PROPERTY(QString indicatorsText READ indicatorsText NOTIFY stateChanged)
+    Q_PROPERTY(bool charging READ charging NOTIFY stateChanged)
+    Q_PROPERTY(bool dualWatch READ dualWatch NOTIFY stateChanged)
+    Q_PROPERTY(bool dualWatchKnown READ dualWatchKnown NOTIFY stateChanged)
+    Q_PROPERTY(int squelchLevel READ squelchLevel NOTIFY stateChanged)
     Q_PROPERTY(QString lastDtmf READ lastDtmf NOTIFY stateChanged)
     Q_PROPERTY(QString frequencyText READ frequencyText NOTIFY stateChanged)
     Q_PROPERTY(QString activeVfo READ activeVfo NOTIFY stateChanged)
@@ -70,6 +80,8 @@ class QuanshengClient final : public QObject
     Q_PROPERTY(QString vfoAName READ vfoAName NOTIFY stateChanged)
     Q_PROPERTY(QString vfoBName READ vfoBName NOTIFY stateChanged)
     Q_PROPERTY(QString vfoAPower READ vfoAPower NOTIFY stateChanged)
+    Q_PROPERTY(QString vfoAStep READ vfoAStep NOTIFY stateChanged)
+    Q_PROPERTY(QString vfoBStep READ vfoBStep NOTIFY stateChanged)
     Q_PROPERTY(QString vfoBPower READ vfoBPower NOTIFY stateChanged)
     Q_PROPERTY(qulonglong eventCount READ eventCount NOTIFY countersChanged)
     Q_PROPERTY(qulonglong bytesReceived READ bytesReceived NOTIFY countersChanged)
@@ -78,6 +90,8 @@ class QuanshengClient final : public QObject
     Q_PROPERTY(QString lastObservationAt READ lastObservationAt NOTIFY stateChanged)
     Q_PROPERTY(bool observationFresh READ observationFresh NOTIFY stateChanged)
     Q_PROPERTY(int observationAgeSeconds READ observationAgeSeconds NOTIFY stateChanged)
+    Q_PROPERTY(int eventSilenceSeconds READ eventSilenceSeconds NOTIFY stateChanged)
+    Q_PROPERTY(bool eventStreamStalled READ eventStreamStalled NOTIFY stateChanged)
     Q_PROPERTY(QString lastObservationText READ lastObservationText NOTIFY stateChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 
@@ -93,8 +107,13 @@ public:
     bool connected() const { return m_socket && m_socket->state() ==  QAbstractSocket::ConnectedState; }
     QString sourceStatus() const { return m_sourceStatus; }
     bool serialAvailable() const { return m_serialAvailable; }
+    bool pttPressed() const { return m_pttPressed; }
+    QString pttStatus() const { return m_pttStatus; }
     bool txControlAvailable() const { return m_txControlAvailable; }
     bool eepromReadAvailable() const { return m_eepromReadAvailable; }
+    bool frequencyControlAvailable() const { return m_frequencyControlAvailable; }
+    QString frequencyControlStatus() const { return m_frequencyControlStatus; }
+    bool controlBusy() const { return m_controlBusy; }
     bool eepromBusy() const { return m_eepromBusy; }
     QString eepromStatus() const { return m_eepromStatus; }
     QString eepromHexDump() const { return m_eepromHexDump; }
@@ -130,6 +149,10 @@ public:
     QString stepText() const { return m_stepText; }
     QString toneIndicator() const { return m_toneIndicator; }
     QString indicatorsText() const { return m_indicatorsText; }
+    bool charging() const { return m_charging; }
+    bool dualWatch() const { return m_dualWatch; }
+    bool dualWatchKnown() const { return m_dualWatchKnown; }
+    int squelchLevel() const { return m_squelchLevel; }
     QString lastDtmf() const { return m_lastDtmf; }
     QString frequencyText() const { return m_frequencyText; }
     QString activeVfo() const { return m_activeVfo; }
@@ -142,6 +165,8 @@ public:
     QString vfoAName() const { return m_vfoAName; }
     QString vfoBName() const { return m_vfoBName; }
     QString vfoAPower() const { return m_vfoAPower; }
+    QString vfoAStep() const { return m_vfoAStep; }
+    QString vfoBStep() const { return m_vfoBStep; }
     QString vfoBPower() const { return m_vfoBPower; }
     qulonglong eventCount() const { return m_eventCount; }
     qulonglong bytesReceived() const { return m_bytesReceived; }
@@ -150,6 +175,8 @@ public:
     QString lastObservationAt() const { return m_lastObservationAt; }
     bool observationFresh() const { return m_observationFresh; }
     int observationAgeSeconds() const { return m_observationAgeSeconds; }
+    int eventSilenceSeconds() const { return m_eventSilenceSeconds; }
+    bool eventStreamStalled() const { return m_eventStreamStalled; }
     QString lastObservationText() const { return m_lastObservationText; }
     QString error() const { return m_error; }
 
@@ -163,6 +190,15 @@ public:
     Q_INVOKABLE void disconnectFromServer();
     Q_INVOKABLE void resetCounters();
     Q_INVOKABLE void readEeprom();
+    Q_INVOKABLE void setFrequency(const QString &frequencyMHz);
+    Q_INVOKABLE void switchVfo();
+    Q_INVOKABLE void toggleVfoMode(const QString &vfo);
+    Q_INVOKABLE void stepMemory(const QString &vfo, bool up);
+    Q_INVOKABLE void setMode(const QString &vfo, const QString &mode);
+    Q_INVOKABLE void setDualWatch(bool enabled);
+    Q_INVOKABLE void setSquelch(int level);
+    Q_INVOKABLE void pressPtt();
+    Q_INVOKABLE void releasePtt();
     void shutdown();
 
 signals:
@@ -184,6 +220,10 @@ private:
     void setError(const QString &error);
 
     QTcpSocket *m_socket = nullptr;
+    QTimer m_pttTimer;
+    bool m_pttPressed = false;
+    QString m_pttId;
+    QString m_pttStatus = QStringLiteral("PTT no disponible");
     QTimer m_reconnectTimer;
     QTimer m_observationTimer;
     QTimer m_notifyTimer;
@@ -200,6 +240,15 @@ private:
     bool m_serialAvailable = false;
     bool m_txControlAvailable = false;
     bool m_eepromReadAvailable = false;
+    bool m_frequencyControlAvailable = false;
+    QString m_frequencyControlStatus = QStringLiteral("No disponible");
+    bool m_controlBusy = false;
+    QString m_controlOperation;
+    QString m_pendingVfoModeTarget;
+    QString m_pendingVfoModePreviousMemory;
+    QString m_pendingRadioControl;
+    bool m_pendingDualWatchPrevious = false;
+    int m_pendingSquelchPrevious = -1;
     bool m_eepromBusy = false;
     QString m_eepromStatus = QStringLiteral("Sin leer");
     QString m_eepromHexDump;
@@ -235,6 +284,10 @@ private:
     QString m_stepText;
     QString m_toneIndicator;
     QString m_indicatorsText;
+    bool m_charging = false;
+    bool m_dualWatch = false;
+    bool m_dualWatchKnown = false;
+    int m_squelchLevel = -1;
     QString m_lastDtmf;
     QString m_frequencyText;
     QString m_activeVfo;
@@ -247,6 +300,7 @@ private:
     QString m_vfoAName;
     QString m_vfoBName;
     QString m_vfoAPower;
+    QString m_vfoAStep, m_vfoBStep;
     QString m_vfoBPower;
     qulonglong m_eventCount = 0;
     qulonglong m_bytesReceived = 0;
@@ -256,5 +310,8 @@ private:
     QString m_lastObservationText;
     bool m_observationFresh = false;
     int m_observationAgeSeconds = -1;
+    QDateTime m_lastEventReceivedAt;
+    int m_eventSilenceSeconds = -1;
+    bool m_eventStreamStalled = false;
     QString m_error;
 };

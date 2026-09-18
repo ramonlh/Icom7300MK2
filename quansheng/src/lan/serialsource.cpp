@@ -5,6 +5,7 @@
 #include "experimental/rssiquery.h"
 #include "experimental/registerquery.h"
 #include "experimental/eepromquery.h"
+#include "experimental/keycontrol.h"
 #include <QDateTime>
 #include <QJsonArray>
 #include <QUuid>
@@ -273,27 +274,62 @@ QJsonArray settingsTable(const QByteArray& dump) {
 }
 
 SerialSource::SerialSource(QObject* parent) : QObject(parent) {
+    pttTimer_.setInterval(50);
+    connect(&pttTimer_, &QTimer::timeout, this, [this] {
+        if (!pttOwner_) return;
+        if (pttLease_.elapsed() >= 1500) { endPtt("lease_expired"); return; }
+        if (pttDuration_.elapsed() >= pttMaxSeconds_ * 1000) { endPtt("max_duration"); return; }
+        if (port_.bytesToWrite() != 0 || !writePttKey(true))
+            finish("error", "ptt_serial_write_failed");
+    });
     connect(&statsTimer_, &QTimer::timeout, this, &SerialSource::stats);
     stopTimer_.setSingleShot(true);
     connect(&stopTimer_, &QTimer::timeout, this, [this] { finish("ended"); });
     connect(&rssiTimer_, &QTimer::timeout, this, [this] {
-        if (!allowRssiQuery_ || eepromBusy_ || status_ != "listening" || port_.bytesToWrite() != 0) return;
+        if (!allowRssiQuery_ || eepromBusy_ || frequencyBusy_ || vfoBusy_ || pttOwner_
+                || status_ != "listening" || port_.bytesToWrite() != 0) return;
         const auto frame = qdock::experimental::makeGetRssiFrame();
         port_.write(reinterpret_cast<const char*>(frame.data()), frame.size());
     });
     connect(&registerTimer_, &QTimer::timeout, this, [this] {
-        if (!allowRegisterQuery_ || eepromBusy_ || status_ != "listening" || port_.bytesToWrite() != 0) return;
+        if (!allowRegisterQuery_ || eepromBusy_ || frequencyBusy_ || vfoBusy_ || pttOwner_
+                || status_ != "listening" || port_.bytesToWrite() != 0) return;
         frequencyCycle_.clear();
         const auto frame = qdock::experimental::makeReadRegistersFrame({0x38, 0x39});
         port_.write(reinterpret_cast<const char*>(frame.data()), frame.size());
     });
     connect(&diagnosticTimer_, &QTimer::timeout,
             this, &SerialSource::requestDiagnosticRegisters);
+    frequencyTimer_.setSingleShot(true);
+    connect(&frequencyTimer_, &QTimer::timeout, this, [this] {
+        const bool vfo = vfoBusy_;
+        if ((!frequencyBusy_ && !vfo) || status_ != QStringLiteral("listening")) return;
+        auto& frames = vfo ? vfoFrames_ : frequencyFrames_;
+        if (frames.isEmpty()) {
+            frequencyBusy_ = false;
+            vfoBusy_ = false;
+            emit message({{"message", vfo ? "vfo_status" : "frequency_status"}, {"status", "complete"}});
+            return;
+        }
+        if (port_.bytesToWrite() != 0) { frequencyTimer_.start(20); return; }
+        port_.write(frames.takeFirst());
+        emit message({{"message", vfo ? "vfo_status" : "frequency_status"}, {"status", "sent"},
+                      {"framesRemaining", frames.size()}});
+        // El UV-K5 necesita tiempo para registrar y liberar cada tecla;
+        // con intervalos menores algunos dígitos iniciales se pierden.
+        frequencyTimer_.start(vfo ? 120 : 150);
+    });
     eepromTimer_.setSingleShot(true);
     connect(&eepromTimer_, &QTimer::timeout, this, [this] {
         if (!eepromBusy_) return;
         eepromBusy_ = false;
         eepromAwaitingSession_ = false;
+        if (eepromSquelchOnly_) {
+            eepromSquelchOnly_ = false;
+            emit message({{"message", "radio_settings"}, {"squelchLevel", QJsonValue::Null},
+                          {"error", "Timeout leyendo nivel de squelch"}});
+            return;
+        }
         emit message({{"message", "eeprom_status"}, {"status", "error"},
                       {"error", "Timeout esperando respuesta EEPROM"}});
     });
@@ -442,6 +478,19 @@ SerialSource::SerialSource(QObject* parent) : QObject(parent) {
             if (eepromBusy_ && qdock::experimental::decodeEepromInfo(event, reading)
                 && reading.offset == eepromOffset_) {
                 eepromTimer_.stop();
+                if (eepromSquelchOnly_) {
+                    eepromBusy_ = false;
+                    eepromSquelchOnly_ = false;
+                    const int index = 0x0e71 - int(reading.offset);
+                    squelchLevel_ = index >= 0 && index < int(reading.data.size())
+                        ? int(reading.data.at(std::size_t(index))) : -1;
+                    if (squelchLevel_ < 0 || squelchLevel_ > 9)
+                        squelchLevel_ = -1;
+                    emit message({{"message", "radio_settings"},
+                                  {"squelchLevel", squelchLevel_ >= 0
+                                      ? QJsonValue(squelchLevel_) : QJsonValue::Null}});
+                    continue;
+                }
                 eepromData_.append(reinterpret_cast<const char*>(reading.data.data()),
                                    qsizetype(reading.data.size()));
                 eepromOffset_ = quint16(eepromOffset_ + reading.data.size());
@@ -467,6 +516,10 @@ SerialSource::SerialSource(QObject* parent) : QObject(parent) {
                 eepromAwaitingSession_ = false;
                 sendNextEepromBlock();
             }
+            if (event.kind == qdock::Event::Kind::Ui && event.type == 6) {
+                transmitting_ = ((event.val1 & 7) == 1);
+                radioStateAge_.start();
+            }
             if (displayModel_.apply(event)) {
                 auto state = qdock::displayStateJson(displayModel_);
                 state.insert("source", "serial");
@@ -483,7 +536,7 @@ SerialSource::SerialSource(QObject* parent) : QObject(parent) {
 
 void SerialSource::start(const QString& port, int seconds, const QString& capturePath,
                          bool allowRssiQuery, bool allowRegisterQuery,
-                         bool allowEepromQuery) {
+                         bool allowEepromQuery, bool allowFrequencyControl, bool allowPtt, int pttMaxSeconds) {
     if (status_ != "not_started") return;
     session_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
     captureRequested_ = !capturePath.isEmpty();
@@ -497,8 +550,11 @@ void SerialSource::start(const QString& port, int seconds, const QString& captur
     allowRssiQuery_ = allowRssiQuery;
     allowRegisterQuery_ = allowRegisterQuery;
     allowEepromQuery_ = allowEepromQuery;
+    allowFrequencyControl_ = allowFrequencyControl;
+    allowPtt_ = allowPtt;
+    pttMaxSeconds_ = pttMaxSeconds;
     QString error;
-    const bool opened = (allowRssiQuery_ || allowRegisterQuery_ || allowEepromQuery_)
+    const bool opened = (allowRssiQuery_ || allowRegisterQuery_ || allowEepromQuery_ || allowFrequencyControl_ || allowPtt_)
                             ? qdock::openRssiQuery(port_, port, error)
                             : qdock::openReadOnly(port_, port, error);
     if (!opened) {
@@ -526,16 +582,34 @@ void SerialSource::start(const QString& port, int seconds, const QString& captur
             }
         });
     }
+    if (allowEepromQuery_)
+        QTimer::singleShot(1500, this, &SerialSource::requestInitialSquelchLevel);
     stopTimer_.start(seconds * 1000);
+}
+
+void SerialSource::requestInitialSquelchLevel() {
+    if (!allowEepromQuery_ || eepromBusy_ || pttOwner_ || frequencyBusy_ || vfoBusy_ || transmitting_ || status_ != QStringLiteral("listening")
+        || !port_.isOpen())
+        return;
+    eepromBusy_ = true;
+    eepromAwaitingSession_ = true;
+    eepromSquelchOnly_ = true;
+    eepromOffset_ = 0x0e00;
+    eepromData_.clear();
+    const auto frame = qdock::experimental::makeStartEepromSessionFrame(0x12345678);
+    port_.write(reinterpret_cast<const char*>(frame.data()), frame.size());
+    eepromTimer_.start(2000);
 }
 
 QString SerialSource::requestEepromRead() {
     if (!allowEepromQuery_) return QStringLiteral("eeprom_read_not_enabled");
     if (status_ != QStringLiteral("listening") || !port_.isOpen())
         return QStringLiteral("serial_not_listening");
+    if (pttOwner_ || transmitting_ || frequencyBusy_ || vfoBusy_) return QStringLiteral("radio_control_busy");
     if (eepromBusy_) return QStringLiteral("eeprom_read_busy");
     eepromBusy_ = true;
     eepromAwaitingSession_ = true;
+    eepromSquelchOnly_ = false;
     eepromOffset_ = 0;
     eepromData_.clear();
     emit message({{"message", "eeprom_status"}, {"status", "starting"},
@@ -546,8 +620,162 @@ QString SerialSource::requestEepromRead() {
     return {};
 }
 
+QString SerialSource::requestFrequencyChange(quint32 frequencyHz) {
+    if (!allowFrequencyControl_) return QStringLiteral("frequency_control_not_enabled");
+    if (status_ != QStringLiteral("listening") || !port_.isOpen())
+        return QStringLiteral("serial_not_listening");
+    if (frequencyBusy_ || vfoBusy_) return QStringLiteral("frequency_change_busy");
+    if (eepromBusy_) return QStringLiteral("eeprom_read_busy");
+    if (transmitting_ || pttOwner_) return QStringLiteral("frequency_change_while_transmitting");
+    const auto& indicators = displayModel_.indicators();
+    if (indicators.locked) return QStringLiteral("radio_locked");
+    if (indicators.scan) return QStringLiteral("scan_active");
+    const auto active = displayModel_.activeVfo();
+    const auto& vfo = active == "A" ? displayModel_.vfoA() : displayModel_.vfoB();
+    if (active.empty() || vfo.memory.empty() || vfo.memory.front() != 'F')
+        return QStringLiteral("frequency_vfo_required");
+    std::vector<std::vector<std::uint8_t>> frames;
+    try { frames = qdock::experimental::makeFrequencyEntryFrames(frequencyHz); }
+    catch (const std::invalid_argument& error) { return QString::fromUtf8(error.what()); }
+    frequencyFrames_.clear();
+    for (const auto& frame : frames) {
+        frequencyFrames_.append(QByteArray(reinterpret_cast<const char*>(frame.data()), int(frame.size())));
+        const auto release = qdock::experimental::makeKeyPressFrame(19);
+        frequencyFrames_.append(QByteArray(reinterpret_cast<const char*>(release.data()), int(release.size())));
+    }
+    frequencyBusy_ = true;
+    emit message({{"message", "frequency_status"}, {"status", "starting"},
+                  {"frequencyHz", qint64(frequencyHz)}, {"vfo", QString::fromStdString(active)}});
+    frequencyTimer_.start(0);
+    return {};
+}
+
+QString SerialSource::requestVfoSwitch() {
+    if (!allowFrequencyControl_) return QStringLiteral("frequency_control_not_enabled");
+    if (status_ != QStringLiteral("listening") || !port_.isOpen()) return QStringLiteral("serial_not_listening");
+    if (frequencyBusy_ || vfoBusy_) return QStringLiteral("vfo_switch_busy");
+    if (eepromBusy_) return QStringLiteral("eeprom_read_busy");
+    if (transmitting_ || pttOwner_) return QStringLiteral("vfo_switch_while_transmitting");
+    const auto& indicators = displayModel_.indicators();
+    if (indicators.locked) return QStringLiteral("radio_locked");
+    if (indicators.scan) return QStringLiteral("scan_active");
+    vfoFrames_.clear();
+    for (const auto& frame : qdock::experimental::makeVfoSwitchFrames())
+        vfoFrames_.append(QByteArray(reinterpret_cast<const char*>(frame.data()), int(frame.size())));
+    vfoBusy_ = true;
+    emit message({{"message", "vfo_status"}, {"status", "starting"}});
+    frequencyTimer_.start(0);
+    return {};
+}
+
+QString SerialSource::requestVfoModeToggle(const QString& targetVfo) {
+    if (targetVfo != "A" && targetVfo != "B") return QStringLiteral("vfo_invalido");
+    if (!allowFrequencyControl_) return QStringLiteral("frequency_control_not_enabled");
+    if (status_ != "listening" || !port_.isOpen()) return QStringLiteral("serial_not_listening");
+    if (frequencyBusy_ || vfoBusy_) return QStringLiteral("vfo_mode_busy");
+    if (eepromBusy_) return QStringLiteral("eeprom_read_busy");
+    if (transmitting_ || pttOwner_) return QStringLiteral("vfo_mode_while_transmitting");
+    const auto& indicators = displayModel_.indicators();
+    if (indicators.locked) return QStringLiteral("radio_locked");
+    if (indicators.scan) return QStringLiteral("scan_active");
+    const bool selectOther = displayModel_.activeVfo() != targetVfo.toStdString();
+    vfoFrames_.clear();
+    for (const auto& frame : qdock::experimental::makeVfoModeToggleFrames(selectOther))
+        vfoFrames_.append(QByteArray(reinterpret_cast<const char*>(frame.data()), int(frame.size())));
+    vfoBusy_ = true;
+    emit message({{"message", "vfo_status"}, {"status", "starting"}, {"targetVfo", targetVfo}});
+    frequencyTimer_.start(0);
+    return {};
+}
+
+QString SerialSource::requestMemoryStep(const QString& targetVfo, bool up) {
+    if (targetVfo != "A" && targetVfo != "B") return QStringLiteral("vfo_invalido");
+    if (!allowFrequencyControl_) return QStringLiteral("frequency_control_not_enabled");
+    if (status_ != "listening" || !port_.isOpen()) return QStringLiteral("serial_not_listening");
+    if (frequencyBusy_ || vfoBusy_) return QStringLiteral("memory_step_busy");
+    if (eepromBusy_) return QStringLiteral("eeprom_read_busy");
+    if (transmitting_ || pttOwner_) return QStringLiteral("memory_step_while_transmitting");
+    const auto& indicators = displayModel_.indicators();
+    if (indicators.locked) return QStringLiteral("radio_locked");
+    if (indicators.scan) return QStringLiteral("scan_active");
+    const bool selectOther = displayModel_.activeVfo() != targetVfo.toStdString();
+    vfoFrames_.clear();
+    for (const auto& frame : qdock::experimental::makeMemoryStepFrames(up, selectOther))
+        vfoFrames_.append(QByteArray(reinterpret_cast<const char*>(frame.data()), int(frame.size())));
+    vfoBusy_ = true;
+    emit message({{"message", "vfo_status"}, {"status", "starting"}, {"targetVfo", targetVfo}});
+    frequencyTimer_.start(0);
+    return {};
+}
+
+QString SerialSource::requestModeChange(const QString& targetVfo, const QString& mode) {
+    static const QStringList modes{"FM", "AM", "USB", "BYP", "RAW"};
+    const int modeIndex = modes.indexOf(mode);
+    if (targetVfo != "A" && targetVfo != "B") return QStringLiteral("vfo_invalido");
+    if (modeIndex < 0) return QStringLiteral("modo_invalido");
+    if (!allowFrequencyControl_) return QStringLiteral("frequency_control_not_enabled");
+    if (status_ != "listening" || !port_.isOpen()) return QStringLiteral("serial_not_listening");
+    if (frequencyBusy_ || vfoBusy_) return QStringLiteral("mode_change_busy");
+    if (eepromBusy_) return QStringLiteral("eeprom_read_busy");
+    if (transmitting_ || pttOwner_) return QStringLiteral("mode_change_while_transmitting");
+    const auto& indicators = displayModel_.indicators();
+    if (indicators.locked) return QStringLiteral("radio_locked");
+    if (indicators.scan) return QStringLiteral("scan_active");
+    const bool selectOther = displayModel_.activeVfo() != targetVfo.toStdString();
+    vfoFrames_.clear();
+    for (const auto& frame : qdock::experimental::makeModeChangeFrames(
+             static_cast<std::uint8_t>(modeIndex), selectOther))
+        vfoFrames_.append(QByteArray(reinterpret_cast<const char*>(frame.data()), int(frame.size())));
+    vfoBusy_ = true;
+    emit message({{"message", "vfo_status"}, {"status", "starting"},
+                  {"targetVfo", targetVfo}, {"mode", mode}});
+    frequencyTimer_.start(0);
+    return {};
+}
+
+QString SerialSource::requestDualWatch(bool enabled) {
+    if (!allowFrequencyControl_) return QStringLiteral("radio_control_not_enabled");
+    if (status_ != "listening" || !port_.isOpen()) return QStringLiteral("serial_not_listening");
+    if (frequencyBusy_ || vfoBusy_) return QStringLiteral("radio_control_busy");
+    if (eepromBusy_) return QStringLiteral("eeprom_read_busy");
+    if (transmitting_ || pttOwner_) return QStringLiteral("dual_watch_while_transmitting");
+    const auto& indicators = displayModel_.indicators();
+    if (indicators.locked) return QStringLiteral("radio_locked");
+    if (indicators.scan) return QStringLiteral("scan_active");
+    vfoFrames_.clear();
+    for (const auto& frame : qdock::experimental::makeDualWatchFrames(enabled))
+        vfoFrames_.append(QByteArray(reinterpret_cast<const char*>(frame.data()), int(frame.size())));
+    vfoBusy_ = true;
+    emit message({{"message", "vfo_status"}, {"status", "starting"},
+                  {"control", "dual_watch"}, {"enabled", enabled}});
+    frequencyTimer_.start(0);
+    return {};
+}
+
+QString SerialSource::requestSquelch(int level) {
+    if (level < 0 || level > 9) return QStringLiteral("squelch_level_invalid");
+    if (!allowFrequencyControl_) return QStringLiteral("radio_control_not_enabled");
+    if (status_ != "listening" || !port_.isOpen()) return QStringLiteral("serial_not_listening");
+    if (frequencyBusy_ || vfoBusy_) return QStringLiteral("radio_control_busy");
+    if (eepromBusy_) return QStringLiteral("eeprom_read_busy");
+    if (transmitting_ || pttOwner_) return QStringLiteral("squelch_while_transmitting");
+    const auto& indicators = displayModel_.indicators();
+    if (indicators.locked) return QStringLiteral("radio_locked");
+    if (indicators.scan) return QStringLiteral("scan_active");
+    vfoFrames_.clear();
+    for (const auto& frame : qdock::experimental::makeSquelchFrames(std::uint8_t(level)))
+        vfoFrames_.append(QByteArray(reinterpret_cast<const char*>(frame.data()), int(frame.size())));
+    vfoBusy_ = true;
+    squelchLevel_ = level;
+    emit message({{"message", "radio_settings"}, {"squelchLevel", squelchLevel_}});
+    emit message({{"message", "vfo_status"}, {"status", "starting"},
+                  {"control", "squelch"}, {"level", level}});
+    frequencyTimer_.start(0);
+    return {};
+}
+
 void SerialSource::sendNextEepromBlock() {
-    const int remaining = 0x2000 - int(eepromOffset_);
+    const int remaining = eepromSquelchOnly_ ? 128 : 0x2000 - int(eepromOffset_);
     const auto size = static_cast<std::uint8_t>(qMin(128, remaining));
     const auto frame = qdock::experimental::makeReadEepromFrame(
         eepromOffset_, size, 0x12345678);
@@ -556,7 +784,8 @@ void SerialSource::sendNextEepromBlock() {
 }
 
 void SerialSource::requestDiagnosticRegisters() {
-    if (!allowRegisterQuery_ || status_ != "listening" || port_.bytesToWrite() != 0)
+    if (!allowRegisterQuery_ || eepromBusy_ || frequencyBusy_ || vfoBusy_ || pttOwner_
+            || status_ != "listening" || port_.bytesToWrite() != 0)
         return;
     registerCycle_.clear();
     const auto frame = qdock::experimental::makeReadRegistersFrame({
@@ -577,6 +806,7 @@ QJsonObject SerialSource::snapshot() const {
             {"captureRequested", captureRequested_}, {"captureOpen", capture_.isOpen()},
             {"rssiQueryEnabled", allowRssiQuery_},
             {"registerQueryEnabled", allowRegisterQuery_},
+            {"frequencyControlEnabled", allowFrequencyControl_},
             {"nextSequence", QString::number(sequence_ + 1)}};
 }
 
@@ -584,6 +814,8 @@ QJsonObject SerialSource::displaySnapshot() const {
     auto state = qdock::displayStateJson(displayModel_);
     state.insert("source", "serial");
     state.insert("session", session_);
+    state.insert("squelchLevel", squelchLevel_ >= 0
+        ? QJsonValue(squelchLevel_) : QJsonValue::Null);
     return state;
 }
 
@@ -596,7 +828,15 @@ void SerialSource::stats() {
 }
 
 void SerialSource::finish(const QString& status, const QString& error) {
+    if (finishing_) return;
+    finishing_ = true;
+    endPtt("source_stopped");
     eepromTimer_.stop();
+    frequencyTimer_.stop();
+    frequencyFrames_.clear();
+    vfoFrames_.clear();
+    frequencyBusy_ = false;
+    vfoBusy_ = false;
     if (eepromBusy_) {
         eepromBusy_ = false;
         eepromAwaitingSession_ = false;
@@ -621,4 +861,67 @@ void SerialSource::finish(const QString& status, const QString& error) {
     }
     stats();
     emit message(snapshot());
+    finishing_ = false;
+}
+
+// Normal Dock keypad PTT, never hardware-mode GPIO/register writes.
+bool SerialSource::writePttKey(bool pressed) {
+    const auto frame = qdock::experimental::makeKeyPressFrame(pressed ? 16 : 19);
+    return port_.isOpen() && port_.write(reinterpret_cast<const char*>(frame.data()),
+                                        frame.size()) == qint64(frame.size());
+}
+
+QString SerialSource::requestPtt(QObject* owner, const QString& action, const QString& id) {
+    if (!txControlAvailable()) return QStringLiteral("ptt_not_enabled");
+    if (id.isEmpty() || id.size() > 64) return QStringLiteral("invalid_ptt_id");
+    if (action == "release" || action == "keepalive") {
+        if (pttOwner_ != owner || pttId_ != id) return QStringLiteral("ptt_not_owner");
+        // A delayed heartbeat cannot revive an expired lease.
+        if (pttLease_.elapsed() >= 1500 || pttDuration_.elapsed() >= pttMaxSeconds_ * 1000) {
+            endPtt(pttDuration_.elapsed() >= pttMaxSeconds_ * 1000
+                       ? "max_duration" : "lease_expired");
+            return QStringLiteral("ptt_expired");
+        }
+        if (action == "release") endPtt("released");
+        else pttLease_.restart();
+        return {};
+    }
+    if (action != "press") return QStringLiteral("invalid_ptt_action");
+    if (pttOwner_) return QStringLiteral("ptt_busy");
+    if (frequencyBusy_ || vfoBusy_ || eepromBusy_ || port_.bytesToWrite() != 0)
+        return QStringLiteral("radio_control_busy");
+    if (transmitting_) return QStringLiteral("radio_already_transmitting");
+    if (!radioStateAge_.isValid() || radioStateAge_.elapsed() > 5000)
+        return QStringLiteral("radio_state_stale");
+    pttOwner_ = owner;
+    pttId_ = id;
+    pttLease_.start();
+    pttDuration_.start();
+    if (!writePttKey(true) || !pttOwner_) {
+        finish("error", "ptt_serial_write_failed");
+        return QStringLiteral("ptt_serial_write_failed");
+    }
+    pttTimer_.start();
+    emit message({{"message", "ptt_state"}, {"active", true}, {"id", id},
+                  {"reason", "pressed"}});
+    return {};
+}
+
+void SerialSource::releasePtt(QObject* owner, const QString& reason) {
+    if (pttOwner_ == owner) endPtt(reason);
+}
+
+void SerialSource::endPtt(const QString& reason) {
+    pttTimer_.stop();
+    if (!pttOwner_) return;
+    const QString id = pttId_;
+    pttOwner_ = nullptr; // Clear before serial operations, which may signal errors.
+    pttId_.clear();
+    bool sent = writePttKey(false);
+    // Drain the release before closing the serial descriptor on shutdown.
+    if (sent && port_.bytesToWrite() > 0)
+        sent = port_.waitForBytesWritten(200) && port_.bytesToWrite() == 0;
+    emit message({{"message", "ptt_state"}, {"active", false}, {"id", id},
+                  {"reason", sent ? reason : QStringLiteral("release_write_failed")}});
+    if (!sent && !finishing_) finish("error", "ptt_release_write_failed");
 }

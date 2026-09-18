@@ -35,6 +35,7 @@ QJsonObject displayStateJson(const DisplayModel& model) {
                            {"name", QString::fromStdString(value.name)},
                            {"mode", QString::fromStdString(value.mode)},
                            {"power", QString::fromStdString(value.power)},
+                           {"step", QString::fromStdString(value.step)},
                            {"selected", value.selected}};
     };
     const auto& flags = model.indicators();

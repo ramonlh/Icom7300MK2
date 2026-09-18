@@ -8,6 +8,55 @@ IC-7300MK2, denominación proporcionada por el usuario.
 Este documento permite retomar el trabajo sin acceder a la conversación original.
 No confundir el port nativo con QuanshengDock Windows bajo Wine.
 
+## PTT experimental autorizado — 17 de septiembre de 2026
+
+El usuario solicita expresamente implementar PTT. Esta actualización prevalece
+sobre los límites históricos de TX/PTT de este documento; no autoriza flasheo,
+escritura EEPROM ni pruebas físicas automáticas.
+
+Implementado PTT momentáneo independiente del Icom: botón del panel Quansheng,
+cliente TCP y servidor serie, habilitado solo con `--allow-ptt` o con la casilla
+**Permitir PTT** del servidor gráfico antes de iniciarlo. El lanzador de telemetría
+existente no habilita PTT automáticamente.
+
+Se reutiliza `KeyPress 0x0801`: tecla 16 para pulsar y 19 para liberar. Referencia
+inspeccionada para esta ampliación: clone local de QuanshengDock en
+`/tmp/QuanshengDock-original`, commit `103acd3f83ae0d920abfd38e0cd1ef242a9b8451`,
+`UI/MouseActions.cs` y `Serial/PTT.cs`. No se entra en hardware mode ni se
+escriben registros/GPIO. La referencia usa repetición de tecla 16 cada 50 ms
+para su PTT externo; se conserva ese intervalo mientras la concesión LAN vive.
+
+El servidor admite un único propietario por pulsación, con ID de operación.
+Exige una observación de estado de menos de 5 s, radio no observada en TX y
+ninguna operación de teclas/EEPROM en curso. Durante PTT suspende consultas y
+rechaza cambios de controles/EEPROM. El cliente mantiene la pulsación cada
+250 ms; el servidor libera si faltan renovaciones durante 1500 ms, al desconectar
+el propietario, al cerrar la fuente/proceso normalmente o al cumplir el límite
+predeterminado de 60 s (`--ptt-max-seconds`, rango 1–180). Un keepalive caducado
+no inicia una nueva transmisión. La GUI libera al soltar/cancelar, cambiar de
+panel, perder actividad de la aplicación, desconectar o cerrar.
+
+**CONFIRMADO offline:** pruebas de tramas/CRC, permisos, autenticación,
+propietario único, conflictos con otros controles, mantenimiento, caducidad,
+límite máximo, desconexión, mensaje inválido y cierre del servidor; prueba del
+cliente con servidor simulado. Compilaciones de aplicación y servidor correctas;
+11/11 suites Quansheng y 2/2 de aplicación aprobadas. Carga QML offscreen con
+panel Quansheng y autoconexiones desactivadas correcta (avisos de PulseAudio por
+restricciones del entorno).
+
+**CONFIRMADO por prueba física del usuario — 18 de septiembre de 2026:** tras
+actualizar y compilar el servidor en `/home/ramon/qdock-readonly` del Pavilion
+(11/11 suites aprobadas allí), TX se activa rápidamente al pulsar PTT y se
+desactiva rápidamente al soltar el botón. Es una confirmación cualitativa del
+usuario, sin medición de latencia. **PENDIENTE de prueba física:** caducidad de
+mantenimiento, límite máximo y liberación ante desconexiones; estas rutas están
+probadas offline.
+
+ `ptt_state.active` significa pulsación enviada, no
+confirmación RF: se conserva por separado el estado candidato observado de radio.
+Un fallo de USB, SIGKILL o pérdida de alimentación puede impedir enviar liberación;
+no se afirma que exista un watchdog físico validado en el firmware.
+
 ## Punto estable READ-ONLY — 13 de septiembre de 2026
 
 **Seguridad de credenciales — 14 de septiembre de 2026:** los lanzadores del

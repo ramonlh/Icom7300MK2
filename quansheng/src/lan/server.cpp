@@ -18,6 +18,7 @@
 #include <QTimer>
 #include <QUuid>
 #include <csignal>
+#include <limits>
 
 namespace {
 constexpr qint64 maxRequest = 4096;
@@ -45,6 +46,7 @@ public:
         socket_->setReadBufferSize(maxRequest + 1);
         connect(socket_, &QTcpSocket::readyRead, this, [this] { receive(); });
         connect(socket_, &QTcpSocket::disconnected, this, [this] {
+            releasePtt();
             qInfo().noquote() << "qdock cliente desconectado:"
                               << "ip=" + socket_->peerAddress().toString()
                               << "host=" + (socket_->peerName().isEmpty()
@@ -57,6 +59,12 @@ public:
         });
     }
 private:
+    void releasePtt() {
+#ifdef QDOCK_SERIAL
+        if (auto* serial = qobject_cast<SerialSource*>(source_))
+            serial->releasePtt(this, "client_disconnected");
+#endif
+    }
     bool send(QJsonObject object) {
         if (socket_->state() != QAbstractSocket::ConnectedState) return false;
         const auto line = QJsonDocument(object).toJson(QJsonDocument::Compact) + '\n';
@@ -75,7 +83,11 @@ private:
         return socket_->write(line) == line.size();
     }
     void fail(const QString& code) {
+        releasePtt();
         timer_.stop();
+        qWarning().noquote() << "qdock cierre de cliente:"
+                             << "ip=" + socket_->peerAddress().toString()
+                             << "motivo=" + code;
         send({{"message", "error"}, {"code", code}});
         closing_ = true;
         socket_->disconnectFromHost();
@@ -113,15 +125,21 @@ private:
                               << "host=" + (socket_->peerName().isEmpty()
                                                  ? QStringLiteral("(sin-nombre)")
                                                  : socket_->peerName());
+            bool txControlAvailable = false;
             bool eepromReadAvailable = false;
+            bool frequencyControlAvailable = false;
 #ifdef QDOCK_SERIAL
-            if (auto* serial = qobject_cast<SerialSource*>(source_))
+            if (auto* serial = qobject_cast<SerialSource*>(source_)) {
+                txControlAvailable = serial->txControlAvailable();
                 eepromReadAvailable = serial->eepromReadAvailable();
+                frequencyControlAvailable = serial->frequencyControlAvailable();
+            }
 #endif
             send({{"message", "welcome"}, {"protocol", "qdock-lan/1"},
                   {"source", source_ ? "serial" : "replay"}, {"serialAvailable", source_ != nullptr},
-                  {"txControlAvailable", false}, {"radioControlAvailable", false},
+                  {"txControlAvailable", txControlAvailable}, {"radioControlAvailable", false},
                   {"eepromReadAvailable", eepromReadAvailable},
+                  {"frequencyControlAvailable", frequencyControlAvailable},
                   {"normalizedStateAvailable", false}});
         } else if (message == "ping") {
             send({{"message", "pong"}});
@@ -143,6 +161,20 @@ private:
             send({{"message", "source_status"}, {"source", "replay"},
                   {"session", session_}, {"status", "replaying"}});
             timer_.start(10);
+        } else if (message == "ptt") {
+            // Preserve rejection of the old, unspecified PTT message.
+            if (!object.value("action").isString() || !object.value("id").isString()) {
+                fail("unsupported_message"); return;
+            }
+            QString error = "ptt_unavailable";
+#ifdef QDOCK_SERIAL
+            if (auto* serial = qobject_cast<SerialSource*>(source_); serial && started_)
+                error = serial->requestPtt(this, object.value("action").toString(),
+                                           object.value("id").toString());
+#endif
+            if (!error.isEmpty())
+                send({{"message", "ptt_status"}, {"id", object.value("id").toString()},
+                      {"error", error}});
         } else if (message == "read_eeprom") {
 #ifdef QDOCK_SERIAL
             auto* serial = qobject_cast<SerialSource*>(source_);
@@ -153,8 +185,86 @@ private:
 #else
             fail("eeprom_read_unavailable");
 #endif
+        } else if (message == "set_frequency") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            bool ok = false;
+            const qint64 requested = object.value("frequencyHz").toVariant().toLongLong(&ok);
+            if (!started_ || !serial || !ok || requested < 0 || requested > std::numeric_limits<quint32>::max()) {
+                send({{"message", "frequency_status"}, {"status", "error"}, {"error", "frequency_change_unavailable"}});
+                return;
+            }
+            const QString error = serial->requestFrequencyChange(quint32(requested));
+            if (!error.isEmpty())
+                send({{"message", "frequency_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "frequency_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "switch_vfo") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            if (!started_ || !serial) {
+                send({{"message", "vfo_status"}, {"status", "error"}, {"error", "vfo_switch_unavailable"}});
+                return;
+            }
+            const QString error = serial->requestVfoSwitch();
+            if (!error.isEmpty())
+                send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "toggle_vfo_mode") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            if (!started_ || !serial) { send({{"message", "vfo_status"}, {"status", "error"}, {"error", "vfo_mode_unavailable"}}); return; }
+            const QString error = serial->requestVfoModeToggle(object.value("vfo").toString());
+            if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "memory_step") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            if (!started_ || !serial) { send({{"message", "vfo_status"}, {"status", "error"}, {"error", "memory_step_unavailable"}}); return; }
+            const QString error = serial->requestMemoryStep(object.value("vfo").toString(), object.value("direction").toString() == "up");
+            if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "set_mode") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            if (!started_ || !serial) { send({{"message", "vfo_status"}, {"status", "error"}, {"error", "mode_change_unavailable"}}); return; }
+            const QString error = serial->requestModeChange(object.value("vfo").toString(), object.value("mode").toString());
+            if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "set_dual_watch") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            if (!started_ || !serial || !object.value("enabled").isBool()) {
+                send({{"message", "vfo_status"}, {"status", "error"}, {"error", "dual_watch_unavailable"}}); return;
+            }
+            const QString error = serial->requestDualWatch(object.value("enabled").toBool());
+            if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "set_squelch") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            const int level = object.value("level").toInt(-1);
+            if (!started_ || !serial || level < 0 || level > 9) {
+                send({{"message", "vfo_status"}, {"status", "error"}, {"error", "squelch_unavailable"}}); return;
+            }
+            const QString error = serial->requestSquelch(level);
+            if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
         } else {
-            // Includes PTT, EEPROM, raw-write and every non-whitelisted control.
+            // Reject raw writes and every non-whitelisted control.
             fail("unsupported_message");
         }
     }
@@ -208,7 +318,7 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     app.setApplicationName("qdock-server");
     QCommandLineParser cli;
-    cli.setApplicationDescription("Servidor Quansheng pasivo; consulta RSSI opcional y explícita.");
+    cli.setApplicationDescription("Servidor Quansheng pasivo; consultas y cambio de frecuencia experimentales y explícitos.");
     cli.addHelpOption();
     cli.addOptions({{"replay", "Captura binaria regular, nunca un dispositivo.", "archivo"},
                     {"serial", "Puerto serie autorizado para escucha READ-ONLY.", "dispositivo"},
@@ -216,6 +326,9 @@ int main(int argc, char** argv) {
                     {"allow-rssi-query", "EXPERIMENTAL: permite únicamente GetRssi 0x0527 cada segundo."},
                     {"allow-register-query", "EXPERIMENTAL: primera lectura de 50 registros a los 3,5 s; después cada 30 s. Frecuencia cada 2 s."},
                     {"allow-eeprom-query", "EXPERIMENTAL: permite una lectura EEPROM completa solicitada por un cliente; nunca escribe."},
+                    {"allow-frequency-control", "EXPERIMENTAL: permite cambiar frecuencia del VFO normal mediante teclas; el firmware puede guardar en EEPROM."},
+                    {"allow-ptt", "EXPERIMENTAL: habilita PTT momentáneo LAN; puede emitir RF."},
+                    {"ptt-max-seconds", "Duración máxima de una pulsación PTT (1–180 s).", "segundos", "60"},
                     {"seconds", "Duración serie (1–86400); no hay reapertura automática.", "segundos", "15"},
                     {"listen", "Dirección IP local de escucha.", "ip", "127.0.0.1"},
                     {"port", "Puerto TCP (0 elige uno libre).", "puerto", "8765"}});
@@ -246,6 +359,14 @@ int main(int argc, char** argv) {
         return fail("--allow-register-query requiere --serial.");
     if (cli.isSet("allow-eeprom-query") && !cli.isSet("serial"))
         return fail("--allow-eeprom-query requiere --serial.");
+    if (cli.isSet("allow-frequency-control") && !cli.isSet("serial"))
+        return fail("--allow-frequency-control requiere --serial.");
+    if (cli.isSet("allow-ptt") && !cli.isSet("serial"))
+        return fail("--allow-ptt requiere --serial.");
+    const int pttMaxSeconds = cli.value("ptt-max-seconds").toInt(&ok);
+    if (!ok || pttMaxSeconds < 1 || pttMaxSeconds > 180
+        || (cli.isSet("ptt-max-seconds") && !cli.isSet("allow-ptt")))
+        return fail("--ptt-max-seconds requiere --allow-ptt y duración 1–180.");
     qInfo().noquote() << "Compilación qdock-server:"
                       << QStringLiteral(QDOCK_BUILD_TIMESTAMP);
     QObject* source = nullptr;
@@ -284,7 +405,8 @@ int main(int argc, char** argv) {
 #ifdef QDOCK_SERIAL
     if (source) serial.start(cli.value("serial"), seconds, cli.value("capture"),
                              cli.isSet("allow-rssi-query"), cli.isSet("allow-register-query"),
-                             cli.isSet("allow-eeprom-query"));
+                             cli.isSet("allow-eeprom-query"), cli.isSet("allow-frequency-control"),
+                             cli.isSet("allow-ptt"), pttMaxSeconds);
 #endif
     QTextStream(stdout) << QJsonDocument(QJsonObject{{"listening", address.toString()},
         {"port", server.serverPort()}, {"source", source ? "serial" : "replay"},

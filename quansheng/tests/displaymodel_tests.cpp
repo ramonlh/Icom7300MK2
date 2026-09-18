@@ -39,6 +39,7 @@ int main() {
     model.apply(ui(1, 174, 1, "L"));
     assert(model.vfoA().frequency == "435.90000");
     assert(model.vfoA().memory == "F6" && model.vfoA().power == "L");
+    assert(model.vfoA().mode == "FM"); // FM se representa sin rótulo propio.
 
     // Physical TxPwr screen captured on 2026-09-13: LOW/MID/HIGH belongs
     // to the most recently selected VFO, even after the VFO lines are cleared.

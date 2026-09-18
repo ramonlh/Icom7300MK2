@@ -58,6 +58,8 @@ class ApplicationLauncher final : public QObject
     Q_PROPERTY(bool lanConnected READ lanConnected NOTIFY lanConnectionChanged)
     Q_PROPERTY(bool lanDataEnabled READ lanDataEnabled NOTIFY lanDataEnabledChanged)
     Q_PROPERTY(QString lanMode READ lanMode NOTIFY lanModeChanged)
+    Q_PROPERTY(int lastRadioTab READ lastRadioTab WRITE setLastRadioTab
+               NOTIFY lastRadioTabChanged)
 
 public:
     explicit ApplicationLauncher(QObject *parent = nullptr);
@@ -121,6 +123,8 @@ public:
     bool lanConnected() const;
     bool lanDataEnabled() const;
     QString lanMode() const;
+    int lastRadioTab() const;
+    void setLastRadioTab(int value);
     void setLanConnectionEnabled(bool value);
     QString bandMemoriesJson() const;
     void setBandMemoriesJson(const QString &value);
@@ -160,6 +164,7 @@ signals:
     void lanConnectionChanged();
     void lanDataEnabledChanged();
     void lanModeChanged();
+    void lastRadioTabChanged();
     void bandMemoriesChanged();
 
 private:
@@ -200,4 +205,5 @@ private:
     bool m_lanConnected = false;
     bool m_lanDataEnabled = false;
     QString m_lanMode;
+    int m_lastRadioTab = 0;
 };
