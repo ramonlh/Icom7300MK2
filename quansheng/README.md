@@ -13,6 +13,29 @@ sin opciones adicionales; sus consultas, controles de teclado y PTT son
 experimentales y requieren habilitación explícita. No escribe EEPROM directamente
 ni flashea firmware.
 
+## CTCSS y DCS RX/TX
+
+En el panel Quansheng, **CTCSS / DCS…** abre el editor del VFO seleccionado.
+**Leer RX / TX** consulta los cuatro menús de tonos; **Escribir RX/TX** aplica
+OFF, uno de los 50 CTCSS o uno de los 104 DCS normales/invertidos, y vuelve a
+leer la pantalla para comprobarlo. OFF desactiva ambas familias. Los índices
+EEPROM se muestran también como frecuencias Hz o códigos DCS de tres cifras.
+
+Requiere actualizar tanto el cliente como `qdock-server` del Pavilion y activar
+el permiso existente `--allow-frequency-control` (controles de teclado en el
+servidor gráfico). La lectura recorre los menús mediante teclas: no es escucha
+pasiva. Desactivar recepción dual, escaneo, FM broadcast y bloqueo; seleccionar
+primero A o B y no utilizar el teclado físico durante la operación. Se exige
+estado RX/TX reciente y se bloquean operaciones simultáneas y PTT.
+
+Se usan exclusivamente teclas del menú del firmware Dock 0.32.21q, sin escritura
+directa de registros ni comandos WriteEeprom. Al aceptar, el propio firmware
+guarda el ajuste en VFO; en MR modifica el canal en uso sin sobrescribir la
+memoria almacenada. No se implementa guardar/reescribir memorias con esta opción.
+La petición del usuario autoriza este ajuste de tonos; no autoriza flasheo ni
+pruebas físicas automáticas. **Validación física pendiente**. La suite `lan-tones`
+simula la radio mediante PTY y comprueba lectura, escritura y errores.
+
 ## PTT momentáneo
 
 En el servidor gráfico del Pavilion, marcar **Permitir PTT** antes de iniciar.

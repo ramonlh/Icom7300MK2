@@ -6,6 +6,7 @@
 #include <QDateTime>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 #include <QTcpSocket>
 #include <QTimer>
 #include <QVariantList>
@@ -29,6 +30,11 @@ class QuanshengClient final : public QObject
     Q_PROPERTY(bool frequencyControlAvailable READ frequencyControlAvailable NOTIFY stateChanged)
     Q_PROPERTY(QString frequencyControlStatus READ frequencyControlStatus NOTIFY stateChanged)
     Q_PROPERTY(bool controlBusy READ controlBusy NOTIFY stateChanged)
+    Q_PROPERTY(bool toneControlAvailable READ toneControlAvailable NOTIFY stateChanged)
+    Q_PROPERTY(QString toneStatus READ toneStatus NOTIFY stateChanged)
+    Q_PROPERTY(QString toneLog READ toneLog NOTIFY stateChanged)
+    Q_PROPERTY(QVariantMap toneState READ toneState NOTIFY stateChanged)
+    Q_PROPERTY(QVariantMap toneStates READ toneStates NOTIFY stateChanged)
     Q_PROPERTY(bool eepromBusy READ eepromBusy NOTIFY stateChanged)
     Q_PROPERTY(QString eepromStatus READ eepromStatus NOTIFY stateChanged)
     Q_PROPERTY(QString eepromHexDump READ eepromHexDump NOTIFY stateChanged)
@@ -197,6 +203,15 @@ public:
     Q_INVOKABLE void setMode(const QString &vfo, const QString &mode);
     Q_INVOKABLE void setDualWatch(bool enabled);
     Q_INVOKABLE void setSquelch(int level);
+    bool toneControlAvailable() const { return m_toneControlAvailable; }
+    QString toneStatus() const { return m_toneStatus; }
+    QString toneLog() const { return m_toneLog.join(QLatin1Char('\n')); }
+    QVariantMap toneState() const { return m_toneState; }
+    QVariantMap toneStates() const { return m_toneStates; }
+    Q_INVOKABLE QVariantList toneOptions(int type) const;
+    Q_INVOKABLE void readTones(const QString& vfo);
+    Q_INVOKABLE void setTone(const QString& vfo, const QString& direction, int type, int index);
+    Q_INVOKABLE void clearToneLog();
     Q_INVOKABLE void pressPtt();
     Q_INVOKABLE void releasePtt();
     void shutdown();
@@ -215,18 +230,36 @@ private slots:
     void onDisconnected();
 
 private:
+    bool m_toneControlAvailable = false;
+    bool m_toneBusy = false;
+    bool m_toneRequestPending = false;
+    QString m_toneStatus = QStringLiteral("Tonos sin leer");
+    QStringList m_toneLog;
+    QVariantMap m_toneState;
+    QVariantMap m_toneStates;
+
     void sendJson(const QJsonObject &object);
     void processLine(const QByteArray &line);
     void setError(const QString &error);
+    void readMemoryTonesIfNeeded(const QString &vfo = {});
+    void retryPendingMemoryToneRead();
+    void appendToneLog(const QString &message);
+    void finishRadioControlWait();
 
     QTcpSocket *m_socket = nullptr;
     QTimer m_pttTimer;
     bool m_pttPressed = false;
+    bool m_skipMemoryToneReadAfterPttRelease = false;
+    bool m_memoryStepPending = false;
+    QString m_memoryStepVfo;
+    int m_memoryToneReadAttempts = 0;
     QString m_pttId;
     QString m_pttStatus = QStringLiteral("PTT no disponible");
     QTimer m_reconnectTimer;
     QTimer m_observationTimer;
     QTimer m_notifyTimer;
+    QTimer m_controlSettleTimer;
+    bool m_waitingControlDisplayState = false;
     bool m_notificationPending = false;
     QByteArray m_buffer;
     QString m_host = QStringLiteral("127.0.0.1");

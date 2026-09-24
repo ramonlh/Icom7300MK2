@@ -55,11 +55,16 @@ class ApplicationLauncher final : public QObject
     Q_PROPERTY(QString lanPassword READ lanPassword WRITE setLanPassword NOTIFY lanSettingsChanged)
     Q_PROPERTY(bool lanConnectionEnabled READ lanConnectionEnabled WRITE setLanConnectionEnabled NOTIFY lanSettingsChanged)
     Q_PROPERTY(QString bandMemoriesJson READ bandMemoriesJson WRITE setBandMemoriesJson NOTIFY bandMemoriesChanged)
+    Q_PROPERTY(QString quanshengBandMemoriesJson READ quanshengBandMemoriesJson WRITE setQuanshengBandMemoriesJson NOTIFY quanshengBandMemoriesChanged)
     Q_PROPERTY(bool lanConnected READ lanConnected NOTIFY lanConnectionChanged)
     Q_PROPERTY(bool lanDataEnabled READ lanDataEnabled NOTIFY lanDataEnabledChanged)
     Q_PROPERTY(QString lanMode READ lanMode NOTIFY lanModeChanged)
     Q_PROPERTY(int lastRadioTab READ lastRadioTab WRITE setLastRadioTab
                NOTIFY lastRadioTabChanged)
+    Q_PROPERTY(bool icomPanelVisible READ icomPanelVisible WRITE setIcomPanelVisible
+               NOTIFY radioPanelsVisibilityChanged)
+    Q_PROPERTY(bool quanshengPanelVisible READ quanshengPanelVisible WRITE setQuanshengPanelVisible
+               NOTIFY radioPanelsVisibilityChanged)
 
 public:
     explicit ApplicationLauncher(QObject *parent = nullptr);
@@ -125,9 +130,15 @@ public:
     QString lanMode() const;
     int lastRadioTab() const;
     void setLastRadioTab(int value);
+    bool icomPanelVisible() const;
+    void setIcomPanelVisible(bool value);
+    bool quanshengPanelVisible() const;
+    void setQuanshengPanelVisible(bool value);
     void setLanConnectionEnabled(bool value);
     QString bandMemoriesJson() const;
     void setBandMemoriesJson(const QString &value);
+    QString quanshengBandMemoriesJson() const;
+    void setQuanshengBandMemoriesJson(const QString &value);
     Q_INVOKABLE void testLanConnection();
     Q_INVOKABLE void disconnectLanConnection();
     Q_INVOKABLE void testLanMode();
@@ -165,7 +176,9 @@ signals:
     void lanDataEnabledChanged();
     void lanModeChanged();
     void lastRadioTabChanged();
+    void radioPanelsVisibilityChanged();
     void bandMemoriesChanged();
+    void quanshengBandMemoriesChanged();
 
 private:
     bool sendLanCivPayload(const QByteArray &payload, const QString &description,
@@ -206,4 +219,6 @@ private:
     bool m_lanDataEnabled = false;
     QString m_lanMode;
     int m_lastRadioTab = 0;
+    bool m_icomPanelVisible = true;
+    bool m_quanshengPanelVisible = true;
 };

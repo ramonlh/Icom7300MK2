@@ -6,6 +6,7 @@
 #include "experimental/registerquery.h"
 #include "experimental/eepromquery.h"
 #include "experimental/keycontrol.h"
+#include "core/tones.h"
 #include <QDateTime>
 #include <QJsonArray>
 #include <QUuid>
@@ -22,13 +23,7 @@ QString indexedLabel(int value, const QStringList& labels, const QString& kind) 
 }
 
 QString toneText(quint8 type, quint8 code) {
-    switch (type) {
-    case 0: return QStringLiteral("Desactivado");
-    case 1: return QStringLiteral("CTCSS índice %1").arg(code);
-    case 2: return QStringLiteral("DCS índice %1").arg(code);
-    case 3: return QStringLiteral("DCS invertido índice %1").arg(code);
-    default: return QStringLiteral("Tipo %1 / índice %2 (pendiente)").arg(type).arg(code);
-    }
+    return QString::fromStdString(qdock::toneLabel(type, type == 0 ? 0 : code));
 }
 
 QString joinPresent(std::initializer_list<QString> values, const QString& separator) {
@@ -149,7 +144,9 @@ QJsonArray settingsTable(const QByteArray& dump) {
                 add(QStringLiteral("VFO y bandas"), address,
                     QStringLiteral("VFO %1 · %2").arg(vfo ? QStringLiteral("B") : QStringLiteral("A"), bandNames.at(band)),
                     QStringLiteral("RX %1 MHz · TX %2 MHz").arg(frequencyText(channel.rxFrequencyHz), frequencyText(channel.txFrequencyHz)),
-                    QStringLiteral("Modo %1 · paso %2").arg(channel.modulation).arg(channel.stepIndex));
+                    QStringLiteral("Modo %1 · paso %2 · RX %3 · TX %4")
+                        .arg(channel.modulation).arg(channel.stepIndex)
+                        .arg(toneText(channel.rxCodeType, channel.rxCode), toneText(channel.txCodeType, channel.txCode)));
         }
     }
 
@@ -274,6 +271,8 @@ QJsonArray settingsTable(const QByteArray& dump) {
 }
 
 SerialSource::SerialSource(QObject* parent) : QObject(parent) {
+    toneTimer_.setSingleShot(true);
+    connect(&toneTimer_, &QTimer::timeout, this, &SerialSource::toneTick);
     pttTimer_.setInterval(50);
     connect(&pttTimer_, &QTimer::timeout, this, [this] {
         if (!pttOwner_) return;
@@ -353,6 +352,7 @@ SerialSource::SerialSource(QObject* parent) : QObject(parent) {
         }
         for (const auto& event : parser_.feed(
                  reinterpret_cast<const std::uint8_t*>(data.constData()), data.size())) {
+            observeToneMenu(event);
             emit message({{"message", "event"}, {"source", "serial"},
                           {"session", session_}, {"sequence", QString::number(++sequence_)},
                           {"observedAt", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
@@ -521,6 +521,14 @@ SerialSource::SerialSource(QObject* parent) : QObject(parent) {
                 radioStateAge_.start();
             }
             if (displayModel_.apply(event)) {
+                // A normalized display update is also a fresh observation of
+                // the radio. Tone reads must not become stale merely because
+                // this firmware did not emit the dedicated RX/TX event.
+                radioStateAge_.start();
+                if (toneOwner_ && toneStage_ != 3
+                    && !displayModel_.activeVfo().empty()
+                    && displayModel_.activeVfo() != toneVfo_.toStdString())
+                    finishTones("VFO cambiado durante la operación; tonos sin confirmar");
                 auto state = qdock::displayStateJson(displayModel_);
                 state.insert("source", "serial");
                 state.insert("session", session_);
@@ -774,6 +782,193 @@ QString SerialSource::requestSquelch(int level) {
     return {};
 }
 
+QString SerialSource::requestTones(QObject* owner, const QString& vfo,
+                                  const QString& direction, int type, int index) {
+    if (!owner || (vfo != "A" && vfo != "B")) return "vfo_invalido";
+    if (!direction.isEmpty() && (direction != "RX" && direction != "TX")) return "tone_direction_invalid";
+    if (!direction.isEmpty() && !qdock::validTone(type, index)) return "tone_value_invalid";
+    if (!allowFrequencyControl_) return "radio_control_not_enabled";
+    if (status_ != "listening" || !port_.isOpen()) return "serial_not_listening";
+    if (frequencyBusy_ || vfoBusy_ || eepromBusy_) return "radio_control_busy";
+    if (pttOwner_ || transmitting_) return "tone_while_transmitting";
+    if (!radioStateAge_.isValid() || radioStateAge_.elapsed() > 5000) return "radio_state_stale";
+    const auto& flags = displayModel_.indicators();
+    if (flags.locked || flags.scan || flags.broadcastFm || flags.dualWatch)
+        return "Desactiva bloqueo, scan, FM y recepción dual antes de gestionar tonos";
+    if (displayModel_.activeVfo() != vfo.toStdString()) return "Selecciona primero el VFO solicitado";
+    const auto& display = vfo == "A" ? displayModel_.vfoA() : displayModel_.vfoB();
+    // The frequency is useful metadata for the tone result, but it is not
+    // required to navigate the tone menus. After a memory step some firmware
+    // redraws the channel identity before it emits the normalized frequency.
+    // The active VFO plus its memory/VFO identity is sufficient here.
+    if (display.frequency.empty() && display.memory.empty())
+        return "Frecuencia e identidad de VFO no observadas";
+    toneOwner_ = owner;
+    toneVfo_ = vfo;
+    toneFrequency_ = QString::fromStdString(display.frequency);
+    toneMemory_ = QString::fromStdString(display.memory);
+    toneTasks_.clear();
+    toneReadings_.clear();
+    toneFailure_.clear();
+    // Menu acceptance persists VFO settings through the firmware. In MR it
+    // adjusts the working channel only; it does not overwrite the stored memory.
+    if (!direction.isEmpty()) {
+        const int dcsMenu = direction == "RX" ? 3 : 5;
+        if (type == 0) {
+            // OFF in one family does not disable the other family in this firmware.
+            toneTasks_.append({dcsMenu, 0});
+            toneTasks_.append({dcsMenu + 1, 0});
+        } else {
+            toneTasks_.append({dcsMenu + (type == 1 ? 1 : 0),
+                               index + (type == 3 ? 105 : 1)});
+        }
+    }
+    for (int menu = 3; menu <= 6; ++menu) toneTasks_.append({menu, -1});
+    vfoBusy_ = true; // Same exclusive control lock as the existing key operations.
+    toneStage_ = 0;
+    emit message({{"message", "tone_status"}, {"status", "starting"}, {"vfo", vfo}});
+    navigateToneMenu();
+    return {};
+}
+
+void SerialSource::navigateToneMenu() {
+    const int menu = toneTasks_.first().first;
+    // Two EXIT clicks cancel an open editor and leave a menu without accepting it.
+    toneKeys_ = {13,19,13,19,10,19,0,19,menu,19};
+    toneMenuHeader_.clear();
+    toneMenuValue_.clear();
+    toneMenuSelection_ = -1;
+    toneWait_.start();
+    toneTimer_.start(0);
+}
+
+void SerialSource::observeToneMenu(const qdock::Event& event) {
+    if (!toneOwner_ || toneStage_ == 1 || toneStage_ == 3 || toneKeys_.size() > 1
+        || event.kind != qdock::Event::Kind::Ui) return;
+    if (event.type == 5) {
+        toneMenuHeader_.clear(); toneMenuValue_.clear(); toneMenuSelection_ = -1;
+        return;
+    }
+    if (event.type > 2 || event.data.empty()
+        || !std::all_of(event.data.begin(), event.data.end(), [](auto c) { return c >= 32 && c <= 126; })) return;
+    const QString text = QString::fromLatin1(reinterpret_cast<const char*>(event.data.data()),
+                                           int(event.data.size())).trimmed();
+    // Default Dock menu layout: selected title at x=0/line=2, value on
+    // right/line=2, numeric selection at x=105/line=0. Never infer from
+    // adjacent titles or from the main screen CT/DCS indicator.
+    if (event.type == 0 && event.val1 == 0 && event.val2 == 2) {
+        toneMenuHeader_ = text; toneMenuValue_.clear(); toneMenuSelection_ = -1;
+    } else if (event.type == 0 && event.val1 >= 50 && event.val2 == 2) {
+        toneMenuValue_ = text;
+    } else if (event.type == 1 && event.val1 == 105 && event.val2 == 0) {
+        bool ok = false;
+        const int value = text.toInt(&ok);
+        toneMenuSelection_ = ok ? value : -1;
+    }
+}
+
+void SerialSource::toneTick() {
+    if (!toneOwner_ || status_ != "listening") return;
+    if (toneStage_ != 3 && (transmitting_ || !radioStateAge_.isValid()
+                           || radioStateAge_.elapsed() > 5000)) {
+        finishTones("Estado RX/TX ausente o TX activo; cambio sin confirmar");
+        // Do not navigate the menu while the operator is transmitting.
+        toneKeys_ = {19};
+    }
+    if (!toneKeys_.isEmpty()) {
+        if (port_.bytesToWrite() != 0) {
+            if (toneWait_.elapsed() > 3000) { finish("error", "tone_serial_write_timeout"); return; }
+            toneTimer_.start(20); return;
+        }
+        const int key = toneKeys_.takeFirst();
+        if (key != 19) {
+            toneMenuHeader_.clear(); toneMenuValue_.clear(); toneMenuSelection_ = -1;
+        }
+        const auto frame = qdock::experimental::makeKeyPressFrame(std::uint8_t(key));
+        if (port_.write(reinterpret_cast<const char*>(frame.data()), qint64(frame.size())) != qint64(frame.size())) {
+            finish("error", "tone_serial_write_failed"); return;
+        }
+        toneWait_.restart();
+        toneTimer_.start(120);
+        return;
+    }
+    if (toneStage_ == 3) {
+        toneOwner_ = nullptr;
+        vfoBusy_ = false;
+        if (toneFailure_.isEmpty()) {
+            const auto tone = [this](int menu) {
+                const int dcs = toneReadings_.value(menu), ctcss = toneReadings_.value(menu + 1);
+                const int type = ctcss ? 1 : dcs ? (dcs >= 105 ? 3 : 2) : 0;
+                const int index = ctcss ? ctcss - 1 : dcs ? dcs - (dcs >= 105 ? 105 : 1) : 0;
+                return QJsonObject{{"type", type}, {"index", index},
+                                   {"text", QString::fromStdString(qdock::toneLabel(type, index))}};
+            };
+            emit message({{"message", "tone_state"}, {"vfo", toneVfo_},
+                          {"frequency", toneFrequency_}, {"memory", toneMemory_},
+                          {"rx", tone(3)}, {"tx", tone(5)},
+                          {"observedAt", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}});
+        }
+        emit message({{"message", "tone_status"},
+                      {"status", toneFailure_.isEmpty() ? "complete" : "error"},
+                      {"error", toneFailure_}, {"vfo", toneVfo_}});
+        return;
+    }
+    if (toneStage_ == 1) {
+        toneStage_ = 2;
+        navigateToneMenu(); // Read again after acceptance; transmitted keys are not confirmation.
+        return;
+    }
+    const int menu = toneTasks_.first().first;
+    const int desired = toneTasks_.first().second;
+    const QString title = QStringList{"RxDCS", "RxCTCS", "TxDCS", "TxCTCS"}.at(menu - 3);
+    const bool ctcss = menu % 2 == 0;
+    const int selection = toneMenuSelection_;
+    const int type = !selection ? 0 : ctcss ? 1 : selection >= 105 ? 3 : 2;
+    const int index = !selection ? 0 : selection - (type == 3 ? 105 : 1);
+    QString expected = QString::fromStdString(qdock::toneLabel(type, index));
+    expected.remove(' ');
+    if (toneMenuHeader_ != title || selection < 0 || !qdock::validTone(type, index)
+        || toneMenuValue_ != expected) {
+        if (toneWait_.elapsed() > 2500) finishTones("Menú de tonos no confirmado por la radio (timeout)");
+        else toneTimer_.start(50);
+        return;
+    }
+    if (toneStage_ == 0 && desired >= 0) {
+        toneStage_ = 1;
+        toneKeys_ = {10,19};
+        const QString digits = QStringLiteral("%1").arg(desired, ctcss ? 2 : 3, 10, QLatin1Char('0'));
+        for (const QChar digit : digits) { toneKeys_.append(digit.digitValue()); toneKeys_.append(19); }
+        toneKeys_ += QVector<int>{10,19,13,19};
+        toneTimer_.start(0);
+        return;
+    }
+    if (toneStage_ == 2 && selection != desired) {
+        finishTones("La radio devuelve un tono distinto del solicitado"); return;
+    }
+    toneReadings_.insert(menu, selection);
+    toneTasks_.removeFirst();
+    toneStage_ = 0;
+    if (toneTasks_.isEmpty()) {
+        if ((toneReadings_.value(3) && toneReadings_.value(4))
+            || (toneReadings_.value(5) && toneReadings_.value(6))) {
+            finishTones("Lecturas de CTCSS y DCS incompatibles; repite la lectura"); return;
+        }
+        finishTones();
+    } else navigateToneMenu();
+}
+
+void SerialSource::finishTones(const QString& error) {
+    toneFailure_ = error;
+    toneStage_ = 3;
+    toneKeys_ = {19,13,19,13,19};
+    toneWait_.restart();
+    toneTimer_.start(0);
+}
+
+void SerialSource::cancelTones(QObject* owner) {
+    if (toneOwner_ == owner) finishTones("Cliente desconectado; operación cancelada, tonos sin confirmar");
+}
+
 void SerialSource::sendNextEepromBlock() {
     const int remaining = eepromSquelchOnly_ ? 128 : 0x2000 - int(eepromOffset_);
     const auto size = static_cast<std::uint8_t>(qMin(128, remaining));
@@ -830,6 +1025,13 @@ void SerialSource::stats() {
 void SerialSource::finish(const QString& status, const QString& error) {
     if (finishing_) return;
     finishing_ = true;
+    if (toneOwner_) {
+        toneTimer_.stop();
+        toneOwner_ = nullptr;
+        toneKeys_.clear();
+        emit message({{"message", "tone_status"}, {"status", "error"},
+                      {"error", "Fuente serie cerrada; tonos sin confirmar"}});
+    }
     endPtt("source_stopped");
     eepromTimer_.stop();
     frequencyTimer_.stop();

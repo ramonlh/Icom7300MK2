@@ -30,6 +30,9 @@ public:
     QString requestModeChange(const QString& targetVfo, const QString& mode);
     QString requestDualWatch(bool enabled);
     QString requestSquelch(int level);
+    QString requestTones(QObject* owner, const QString& vfo, const QString& direction = {},
+                         int type = -1, int index = -1);
+    void cancelTones(QObject* owner);
     bool eepromReadAvailable() const { return allowEepromQuery_; }
     bool frequencyControlAvailable() const { return allowFrequencyControl_; }
     void stop();
@@ -38,6 +41,20 @@ public:
 signals:
     void message(const QJsonObject& object);
 private:
+    void toneTick();
+    void observeToneMenu(const qdock::Event& event);
+    void navigateToneMenu();
+    void finishTones(const QString& error = {});
+    QObject* toneOwner_ = nullptr;
+    QTimer toneTimer_;
+    QElapsedTimer toneWait_;
+    QVector<int> toneKeys_;
+    QVector<QPair<int, int>> toneTasks_; // menu, desired selection (-1 = read)
+    QString toneVfo_, toneFrequency_, toneMemory_, toneFailure_;
+    QString toneMenuHeader_, toneMenuValue_;
+    int toneMenuSelection_ = -1;
+    int toneStage_ = 0; // 0=navigate, 1=edit, 2=verify, 3=cleanup
+    QMap<int, int> toneReadings_;
     void endPtt(const QString& reason);
     bool writePttKey(bool pressed);
     void finish(const QString& status, const QString& error = {});

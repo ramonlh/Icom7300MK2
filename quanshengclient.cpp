@@ -1,4 +1,5 @@
 #include "quanshengclient.h"
+#include "quansheng/src/core/tones.h"
 
 #include <QAbstractSocket>
 #include <QDateTime>
@@ -102,6 +103,19 @@ QuanshengClient::QuanshengClient(QObject *parent)
         emit countersChanged();
     });
 
+    m_controlSettleTimer.setInterval(6000);
+    m_controlSettleTimer.setSingleShot(true);
+    connect(&m_controlSettleTimer, &QTimer::timeout, this, [this]() {
+        if (!m_waitingControlDisplayState)
+            return;
+        m_waitingControlDisplayState = false;
+        m_controlBusy = false;
+        m_frequencyControlStatus = QStringLiteral("%1 · sin nueva confirmación de pantalla; controles liberados")
+            .arg(m_controlOperation.isEmpty() ? QStringLiteral("Operación") : m_controlOperation);
+        m_controlOperation.clear();
+        emit stateChanged();
+    });
+
     connect(m_socket, &QTcpSocket::connected,
             this, &QuanshengClient::onConnected);
     connect(m_socket, &QTcpSocket::readyRead,
@@ -115,6 +129,36 @@ QuanshengClient::QuanshengClient(QObject *parent)
 QuanshengClient::~QuanshengClient()
 {
     shutdown();
+}
+
+void QuanshengClient::appendToneLog(const QString &message)
+{
+    m_toneLog.append(QStringLiteral("%1 %2")
+                     .arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss")), message));
+    constexpr int maxEntries = 120;
+    while (m_toneLog.size() > maxEntries)
+        m_toneLog.removeFirst();
+    emit stateChanged();
+}
+
+void QuanshengClient::clearToneLog()
+{
+    m_toneLog.clear();
+    emit stateChanged();
+}
+
+void QuanshengClient::finishRadioControlWait()
+{
+    if (!m_waitingControlDisplayState)
+        return;
+    m_waitingControlDisplayState = false;
+    m_controlSettleTimer.stop();
+    if (!m_toneBusy)
+        m_controlBusy = false;
+    m_frequencyControlStatus = (m_controlOperation.isEmpty()
+        ? QStringLiteral("Operación") : m_controlOperation)
+        + QStringLiteral(" · confirmado por pantalla");
+    m_controlOperation.clear();
 }
 
 void QuanshengClient::setHost(const QString &host)
@@ -170,6 +214,12 @@ void QuanshengClient::connectToServer()
     if (m_shuttingDown)
         return;
     releasePtt();
+    m_toneControlAvailable = false;
+    m_toneBusy = false;
+    m_toneRequestPending = false;
+    m_toneState.clear();
+    m_toneStates.clear();
+    m_toneStatus = QStringLiteral("Tonos sin leer");
     m_txControlAvailable = false;
     m_reconnectRequested = true;
     setError(QString());
@@ -182,6 +232,8 @@ void QuanshengClient::connectToServer()
     m_frequencyControlAvailable = false;
     m_frequencyControlStatus = QStringLiteral("No disponible");
     m_controlBusy = false;
+    m_waitingControlDisplayState = false;
+    m_controlSettleTimer.stop();
     m_controlOperation.clear();
     m_pendingVfoModeTarget.clear();
     m_pendingVfoModePreviousMemory.clear();
@@ -247,6 +299,7 @@ void QuanshengClient::shutdown()
     m_reconnectTimer.stop();
     m_observationTimer.stop();
     m_notifyTimer.stop();
+    m_controlSettleTimer.stop();
     m_notificationPending = false;
     if (m_socket) {
         m_socket->disconnect(this);
@@ -267,6 +320,8 @@ void QuanshengClient::disconnectFromServer()
     m_frequencyControlAvailable = false;
     m_frequencyControlStatus = QStringLiteral("No disponible");
     m_controlBusy = false;
+    m_waitingControlDisplayState = false;
+    m_controlSettleTimer.stop();
     m_controlOperation.clear();
     m_pendingVfoModeTarget.clear();
     m_pendingVfoModePreviousMemory.clear();
@@ -334,6 +389,13 @@ void QuanshengClient::switchVfo()
     const QString destination = m_activeVfo == QStringLiteral("A")
         ? QStringLiteral("B") : m_activeVfo == QStringLiteral("B")
         ? QStringLiteral("A") : QStringLiteral("—");
+    if (destination == QStringLiteral("A") || destination == QStringLiteral("B")) {
+        m_memoryStepPending = true;
+        m_memoryToneReadAttempts = 0;
+        m_memoryStepVfo = destination;
+        m_toneStates.remove(destination);
+        m_toneState.clear();
+    }
     m_controlOperation = QStringLiteral("Cambiar VFO %1 → %2")
         .arg(m_activeVfo.isEmpty() ? QStringLiteral("—") : m_activeVfo, destination);
     m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
@@ -350,6 +412,11 @@ void QuanshengClient::toggleVfoMode(const QString &vfo)
     m_pendingVfoModePreviousMemory = memory;
     const bool wasMemory = memory == QStringLiteral("Memoria")
         || memory.startsWith(QLatin1Char('M'));
+    m_memoryStepPending = true;
+    m_memoryToneReadAttempts = 0;
+    m_memoryStepVfo = vfo;
+    m_toneStates.remove(vfo);
+    m_toneState.clear();
     // La tecla actúa inmediatamente en la radio, pero el firmware puede tardar
     // varios segundos en volver a dibujar Mxxx/Fxxx. Reflejar provisionalmente
     // el destino y sustituirlo cuando llegue la confirmación de pantalla.
@@ -368,6 +435,9 @@ void QuanshengClient::toggleVfoMode(const QString &vfo)
 void QuanshengClient::stepMemory(const QString &vfo, bool up)
 {
     if (!connected() || !m_frequencyControlAvailable || m_controlBusy || (vfo != "A" && vfo != "B")) return;
+    m_memoryStepPending = true;
+    m_memoryToneReadAttempts = 0;
+    m_memoryStepVfo = vfo;
     const QString direction = up ? QStringLiteral("subir memoria")
                                  : QStringLiteral("bajar memoria");
     m_controlOperation = m_activeVfo == vfo
@@ -477,6 +547,12 @@ void QuanshengClient::onDisconnected()
     if (m_shuttingDown)
         return;
     m_pttTimer.stop();
+    m_toneControlAvailable = false;
+    m_toneBusy = false;
+    m_toneRequestPending = false;
+    m_toneState.clear();
+    m_toneStates.clear();
+    m_toneStatus = QStringLiteral("Desconectado; tonos sin confirmar");
     m_pttPressed = false;
     m_pttId.clear();
     m_txControlAvailable = false;
@@ -486,6 +562,8 @@ void QuanshengClient::onDisconnected()
     m_sourceStatus = QStringLiteral("desconectado");
     m_serialAvailable = false;
     m_controlBusy = false;
+    m_waitingControlDisplayState = false;
+    m_controlSettleTimer.stop();
     m_controlOperation.clear();
     m_pendingVfoModeTarget.clear();
     m_pendingVfoModePreviousMemory.clear();
@@ -499,6 +577,101 @@ void QuanshengClient::onDisconnected()
     emit stateChanged();
     if (m_reconnectRequested && m_autoReconnect && !m_reconnectTimer.isActive())
         m_reconnectTimer.start();
+}
+
+QVariantList QuanshengClient::toneOptions(int type) const
+{
+    QVariantList values;
+    const int count = type == 0 ? 1 : type == 1 ? 50 : (type == 2 || type == 3) ? 104 : 0;
+    for (int i = 0; i < count; ++i)
+        values.append(QString::fromStdString(qdock::toneLabel(type, i)));
+    return values;
+}
+
+void QuanshengClient::readTones(const QString& vfo)
+{
+    if (!connected() || !m_toneControlAvailable || m_controlBusy || m_eepromBusy
+        || m_pttPressed || m_sourceStatus != "listening" || (vfo != "A" && vfo != "B")) return;
+    m_toneRequestPending = true;
+    m_controlBusy = true;
+    m_toneState.clear();
+    m_toneStates.remove(vfo);
+    m_toneStatus = QStringLiteral("Solicitando lectura de tonos…");
+    appendToneLog(QStringLiteral("TX read_tones vfo=%1").arg(vfo));
+    sendJson({{"message", "read_tones"}, {"vfo", vfo}});
+    emit stateChanged();
+}
+
+void QuanshengClient::readMemoryTonesIfNeeded(const QString &requestedVfo)
+{
+    const QString requested = requestedVfo.isEmpty() ? QStringLiteral("active") : requestedVfo;
+    if (!connected() || !m_toneControlAvailable || m_controlBusy || m_eepromBusy
+        || m_toneBusy || m_toneRequestPending || m_pttPressed
+        || m_sourceStatus != QStringLiteral("listening"))
+        return;
+    if (m_skipMemoryToneReadAfterPttRelease) {
+        return;
+    }
+
+    const QString vfo = requestedVfo == QStringLiteral("A") || requestedVfo == QStringLiteral("B")
+        ? requestedVfo
+        : (m_activeVfo == QStringLiteral("B") ? QStringLiteral("B") : QStringLiteral("A"));
+    const QString memory = vfo == QStringLiteral("B") ? m_vfoBMemory : m_vfoAMemory;
+    const QString frequency = vfo == QStringLiteral("B")
+        ? m_vfoBFrequencyText : m_vfoAFrequencyText;
+    if (memory.isEmpty() || (!memory.startsWith(QLatin1Char('M'))
+                             && memory != QStringLiteral("Memoria"))
+        || frequency.isEmpty())
+        return;
+
+    const QVariantMap cached = m_toneStates.value(vfo).toMap();
+    if (!cached.isEmpty() && cached.value(QStringLiteral("frequency")).toString() == frequency
+        && cached.value(QStringLiteral("memory")).toString() == memory)
+        return;
+
+    qInfo().noquote() << "Quansheng: lectura automática de tonos"
+                      << "solicitado=" + requested
+                      << "vfo=" + vfo
+                      << "activo=" + m_activeVfo
+                      << "memoria=" + memory
+                      << "frecuencia=" + frequency;
+    appendToneLog(QStringLiteral("AUTO vfo=%1 activo=%2 memoria=%3 frecuencia=%4")
+                  .arg(vfo, m_activeVfo, memory, frequency));
+    readTones(vfo);
+}
+
+void QuanshengClient::retryPendingMemoryToneRead()
+{
+    if (!m_memoryStepPending)
+        return;
+    if (++m_memoryToneReadAttempts > 12) {
+        m_memoryStepPending = false;
+        m_memoryStepVfo.clear();
+        return;
+    }
+    const QString targetVfo = m_memoryStepVfo;
+    readMemoryTonesIfNeeded(targetVfo);
+    if (m_toneRequestPending || m_toneBusy) {
+        m_memoryStepPending = false;
+        m_memoryStepVfo.clear();
+        return;
+    }
+    QTimer::singleShot(400, this, &QuanshengClient::retryPendingMemoryToneRead);
+}
+
+void QuanshengClient::setTone(const QString& vfo, const QString& direction, int type, int index)
+{
+    if (!connected() || !m_toneControlAvailable || m_controlBusy || m_eepromBusy
+        || m_pttPressed || m_sourceStatus != "listening" || (vfo != "A" && vfo != "B")
+        || (direction != "RX" && direction != "TX") || !qdock::validTone(type, index)) return;
+    m_toneRequestPending = true;
+    m_controlBusy = true;
+    m_toneState.clear();
+    m_toneStates.remove(vfo);
+    m_toneStatus = QStringLiteral("Escribiendo tono %1; pendiente de verificación…").arg(direction);
+    sendJson({{"message", "set_tone"}, {"vfo", vfo}, {"direction", direction},
+              {"type", type}, {"index", index}});
+    emit stateChanged();
 }
 
 void QuanshengClient::sendJson(const QJsonObject &object)
@@ -536,14 +709,10 @@ void QuanshengClient::processLine(const QByteArray &line)
         if (level >= 0 && level <= 9)
             m_squelchLevel = level;
     }
-    if (message == QStringLiteral("display_state")
-        && m_frequencyControlStatus.contains(QStringLiteral("esperando radio"), Qt::CaseInsensitive)) {
-        m_frequencyControlStatus = (m_controlOperation.isEmpty()
-            ? QStringLiteral("Operación") : m_controlOperation)
-            + QStringLiteral(" · recibido de la radio");
-        m_controlOperation.clear();
-    }
+    if (message == QStringLiteral("display_state"))
+        finishRadioControlWait();
     if (message == QStringLiteral("welcome")) {
+        m_toneControlAvailable = object.value("toneControlAvailable").toBool();
         qInfo() << "Quansheng LAN welcome recibido";
         m_serialAvailable = object.value(QStringLiteral("serialAvailable")).toBool();
         m_txControlAvailable = object.value(QStringLiteral("txControlAvailable")).toBool();
@@ -580,6 +749,14 @@ void QuanshengClient::processLine(const QByteArray &line)
         if (m_sourceStatus != "listening") {
             releasePtt();
             m_txControlAvailable = false;
+            m_toneControlAvailable = false;
+            m_toneBusy = m_toneRequestPending = false;
+            m_toneState.clear();
+            m_toneStates.clear();
+            m_toneStatus = QStringLiteral("Fuente serie detenida; tonos sin confirmar");
+            m_controlBusy = false;
+            m_waitingControlDisplayState = false;
+            m_controlSettleTimer.stop();
         }
         if (object.contains(QStringLiteral("error")))
             setError(object.value(QStringLiteral("error")).toString());
@@ -598,13 +775,91 @@ void QuanshengClient::processLine(const QByteArray &line)
         else
             m_eepromStatus = QStringLiteral("Iniciando sesión EEPROM…");
         emit stateChanged();
+    } else if (message == QStringLiteral("tone_status")) {
+        const QString status = object.value("status").toString();
+        if (status == "starting") {
+            m_toneRequestPending = false;
+            m_toneBusy = true;
+            m_controlBusy = true;
+            m_toneState.clear();
+            m_toneStatus = QStringLiteral("Leyendo/verificando menús de tonos…");
+        } else if (status == "complete" || status == "error") {
+            m_toneBusy = m_toneRequestPending = false;
+            m_controlBusy = false;
+            m_toneStatus = status == "complete"
+                ? QStringLiteral("Tonos confirmados por lectura de pantalla")
+                : object.value("error").toString();
+            if (status == "error") m_toneState.clear();
+            qInfo().noquote() << "Quansheng: lectura de tonos"
+                              << (status == "complete" ? "completada" : "fallida")
+                              << "vfo=" << object.value("vfo").toString()
+                              << (status == "error" ? object.value("error").toString() : QString());
+            appendToneLog(QStringLiteral("RX tone_status %1 vfo=%2%3")
+                          .arg(status, object.value("vfo").toString(),
+                               status == QStringLiteral("error")
+                               ? QStringLiteral(" error=%1").arg(object.value("error").toString())
+                               : QString()));
+        } else if (status == "rejected") {
+            if (m_toneRequestPending && !m_toneBusy) m_controlBusy = false;
+            m_toneRequestPending = false;
+            m_toneStatus = object.value("error").toString();
+            qWarning().noquote() << "Quansheng: lectura de tonos rechazada por el servidor:"
+                                 << m_toneStatus << "vfo=" << object.value("vfo").toString();
+            appendToneLog(QStringLiteral("RX tone_status rejected vfo=%1 error=%2")
+                          .arg(object.value("vfo").toString(), m_toneStatus));
+        }
+        emit stateChanged();
+    } else if (message == QStringLiteral("tone_state")) {
+        const auto rx = object.value("rx").toObject(), tx = object.value("tx").toObject();
+        const QString vfo = object.value("vfo").toString();
+        if ((vfo == "A" || vfo == "B")
+            && qdock::validTone(rx.value("type").toInt(-1), rx.value("index").toInt(-1))
+            && qdock::validTone(tx.value("type").toInt(-1), tx.value("index").toInt(-1))) {
+            // A memory tone read can complete before the server has emitted
+            // the normalized frequency. Use the client's current display
+            // value for cache identity so the automatic reader stops retrying.
+            QJsonObject normalized = object;
+            if (normalized.value(QStringLiteral("frequency")).toString().isEmpty()) {
+                normalized.insert(QStringLiteral("frequency"),
+                                  vfo == QStringLiteral("B")
+                                      ? m_vfoBFrequencyText : m_vfoAFrequencyText);
+            }
+            if (normalized.value(QStringLiteral("memory")).toString().isEmpty()) {
+                normalized.insert(QStringLiteral("memory"),
+                                  vfo == QStringLiteral("B")
+                                      ? m_vfoBMemory : m_vfoAMemory);
+            }
+            m_toneState = normalized.toVariantMap();
+            m_toneStates.insert(vfo, m_toneState);
+            appendToneLog(QStringLiteral("RX tone_state vfo=%1 memoria=%2 frecuencia=%3 RX=%4 TX=%5")
+                          .arg(vfo, normalized.value("memory").toString(), normalized.value("frequency").toString(),
+                               rx.value("text").toString(), tx.value("text").toString()));
+        }
+        emit stateChanged();
     } else if (message == QStringLiteral("frequency_status") || message == QStringLiteral("vfo_status")) {
         const QString status = object.value(QStringLiteral("status")).toString();
         const bool vfo = message == QStringLiteral("vfo_status");
-        if (status == QStringLiteral("starting") || status == QStringLiteral("sent"))
+        if (status == QStringLiteral("starting")) {
+            const QString targetVfo = object.value(QStringLiteral("targetVfo")).toString();
+            const QString invalidatedVfo = targetVfo == QStringLiteral("A") || targetVfo == QStringLiteral("B")
+                ? targetVfo : m_activeVfo;
+            m_toneStates.remove(invalidatedVfo);
+            m_toneState.clear();
+            m_toneStatus = QStringLiteral("Radio modificada; vuelve a leer los tonos");
+        }
+        if (status == QStringLiteral("starting") || status == QStringLiteral("sent")) {
             m_controlBusy = true;
-        else if (status == QStringLiteral("complete") || status == QStringLiteral("error"))
+            m_waitingControlDisplayState = false;
+            m_controlSettleTimer.stop();
+        } else if (status == QStringLiteral("complete")) {
+            m_waitingControlDisplayState = true;
+            m_controlBusy = true;
+            m_controlSettleTimer.start();
+        } else if (status == QStringLiteral("error") && !m_toneBusy) {
             m_controlBusy = false;
+            m_waitingControlDisplayState = false;
+            m_controlSettleTimer.stop();
+        }
         if (status == QStringLiteral("starting"))
             m_frequencyControlStatus = (m_controlOperation.isEmpty()
                 ? (vfo ? QStringLiteral("Operación de VFO") : QStringLiteral("Cambio de frecuencia"))
@@ -620,6 +875,13 @@ void QuanshengClient::processLine(const QByteArray &line)
             m_frequencyControlStatus = QStringLiteral("%1 · error: %2")
                 .arg(m_controlOperation.isEmpty() ? QStringLiteral("Operación") : m_controlOperation,
                      object.value(QStringLiteral("error")).toString());
+        if (status == QStringLiteral("error")) {
+            m_memoryStepPending = false;
+            m_memoryStepVfo.clear();
+        }
+        if (status == QStringLiteral("complete") && m_memoryStepPending) {
+            QTimer::singleShot(300, this, &QuanshengClient::retryPendingMemoryToneRead);
+        }
         if (status == QStringLiteral("error") && !m_pendingVfoModeTarget.isEmpty()) {
             QString &memory = m_pendingVfoModeTarget == QStringLiteral("A")
                 ? m_vfoAMemory : m_vfoBMemory;
@@ -1049,6 +1311,27 @@ void QuanshengClient::processLine(const QByteArray &line)
         };
         updateMemory(m_vfoAMemory, a, QStringLiteral("A"));
         updateMemory(m_vfoBMemory, b, QStringLiteral("B"));
+        if (!m_toneBusy) {
+            bool invalidated = false;
+            const auto invalidateIfChanged = [this, &invalidated](const QString &vfo, const QString &frequency,
+                                                     const QString &) {
+                const QVariantMap state = m_toneStates.value(vfo).toMap();
+                if (state.isEmpty() || frequency.isEmpty()
+                    || state.value("frequency").toString().isEmpty())
+                    return;
+                // La etiqueta de memoria puede llegar en un display_state
+                // distinto durante la navegación de los menús de tonos.
+                if (state.value("frequency").toString() != frequency) {
+                    m_toneStates.remove(vfo);
+                    invalidated = true;
+                }
+            };
+            invalidateIfChanged(QStringLiteral("A"), m_vfoAFrequencyText, m_vfoAMemory);
+            invalidateIfChanged(QStringLiteral("B"), m_vfoBFrequencyText, m_vfoBMemory);
+            m_toneState = m_toneStates.value(m_activeVfo).toMap();
+            if (m_toneState.isEmpty() && invalidated)
+                m_toneStatus = QStringLiteral("VFO/canal cambiado; vuelve a leer los tonos");
+        }
         updateIfPresent(m_vfoAName, a, QStringLiteral("name"));
         updateIfPresent(m_vfoBName, b, QStringLiteral("name"));
         updateIfPresent(m_vfoAMode, a, QStringLiteral("mode"));
@@ -1090,6 +1373,13 @@ void QuanshengClient::processLine(const QByteArray &line)
         m_frequencyText = m_activeVfo == QStringLiteral("B")
             ? m_vfoBFrequencyText : m_vfoAFrequencyText;
         emit stateChanged();
+        // Memory changes are reported as display_state events. Read the live
+        // menu values once the new channel is visible, including on entry to
+        // memory mode and after every channel step.
+        readMemoryTonesIfNeeded();
+        if (m_memoryStepPending) {
+            QTimer::singleShot(400, this, &QuanshengClient::retryPendingMemoryToneRead);
+        }
     } else if (message == QStringLiteral("stats")) {
         m_bytesReceived = object.value(QStringLiteral("bytes")).toString().toULongLong();
         m_discardedBytes = object.value(QStringLiteral("discarded")).toString().toULongLong();
@@ -1128,6 +1418,13 @@ void QuanshengClient::releasePtt()
     m_pttTimer.stop();
     if (!m_pttPressed) return;
     m_pttPressed = false;
+    const QString memory = m_activeVfo == QStringLiteral("B") ? m_vfoBMemory : m_vfoAMemory;
+    if (memory == QStringLiteral("Memoria") || memory.startsWith(QLatin1Char('M'))) {
+        m_skipMemoryToneReadAfterPttRelease = true;
+        QTimer::singleShot(1000, this, [this] {
+            m_skipMemoryToneReadAfterPttRelease = false;
+        });
+    }
     sendJson({{"message", "ptt"}, {"action", "release"}, {"id", m_pttId}});
     m_pttStatus = QStringLiteral("Solicitando liberar PTT…");
     emit stateChanged();

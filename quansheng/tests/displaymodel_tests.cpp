@@ -25,6 +25,23 @@ int main() {
     assert(model.vfoA().memory == "M1" && model.vfoA().name == "VA.LEON");
     assert(model.vfoA().mode == "FM" && model.vfoA().power == "H");
     assert(model.vfoB().frequency == "110.93750");
+
+    // Memory navigation can redraw the B VFO one or two UI lines lower.
+    model.apply(ui(1, 113, 6, "50"));
+    model.apply(ui(3, 32, 5, "438.650"));
+    model.apply(ui(1, 2, 6, "M10"));
+    assert(model.vfoB().frequency == "438.65050");
+    assert(model.vfoB().memory == "M10");
+
+    // With B selected, the radio may redraw B in the upper screen block.
+    model.apply(ui(7, 5, 0, "", 5));
+    model.apply(ui(1, 113, 1, "00"));
+    model.apply(ui(3, 32, 0, "145.625"));
+    model.apply(ui(1, 2, 1, "M12"));
+    assert(model.activeVfo() == "B");
+    assert(model.vfoB().frequency == "145.62500");
+    assert(model.vfoB().memory == "M12");
+    model.apply(ui(7, 1, 0, "", 1));
     auto falsePositive = ui(0, 36, 1, "145.67500");
     falsePositive.data.push_back(0);
     assert(!model.apply(falsePositive));

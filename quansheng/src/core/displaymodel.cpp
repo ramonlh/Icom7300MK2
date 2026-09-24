@@ -130,6 +130,31 @@ bool DisplayModel::apply(const Event& event) {
         else b_.mode = text;
         changed = true;
     }
+    // When VFO B is selected, the radio can redraw that VFO in the upper
+    // screen lines instead of keeping it in the lower split-VFO block.
+    if (lastActiveVfo_ == "B" && line >= 1 && line <= 3) {
+        if (line == 1 && event.type == 3 && event.val1 == 32
+                && validFrequency(text))
+            bFrequencyMain_ = text, updateBfrequency(), changed = true;
+        else if (line >= 1 && event.val1 == 113 && text.size() <= 3
+                 && std::all_of(text.begin(), text.end(),
+                                [](unsigned char c) { return c >= '0' && c <= '9'; }))
+            bFrequencySuffix_ = text, updateBfrequency(), changed = true;
+        else if (line >= 1 && event.val1 == 2 && text.size() <= 4)
+            b_.memory = text, changed = true;
+        else if (line <= 2 && event.val1 == 36)
+            b_.name = text, changed = true;
+        else if (line >= 1 && event.val1 == 152 && validMode(text))
+            b_.mode = text, changed = true;
+        else if (line >= 1 && event.val1 == 152
+                 && (text == "CT" || text == "DCS" || text == "DCR"))
+            b_.mode = "FM", changed = true;
+        else if (line >= 1 && event.val1 == 174) {
+            b_.power = text;
+            if (b_.mode.empty()) b_.mode = "FM";
+            changed = true;
+        }
+    }
     if (text.size() >= 3 && text.size() <= 12
         && text.compare(text.size() - 3, 3, "kHz") == 0) {
         indicators_.step = text;
@@ -164,19 +189,19 @@ bool DisplayModel::apply(const Event& event) {
             if (a_.mode.empty()) a_.mode = "FM";
             changed = true;
         }
-    } else if (line >= 5 && line <= 7) {
-        if (line == 5 && event.val1 == 32 && validFrequency(text)) bFrequencyMain_ = text, updateBfrequency(), changed = true;
-        else if (line == 6 && event.val1 == 113 && text.size() <= 3
+    } else if (line >= 4 && line <= 7) {
+        if (line >= 4 && line <= 7 && event.val1 == 32 && validFrequency(text)) bFrequencyMain_ = text, updateBfrequency(), changed = true;
+        else if (line >= 4 && line <= 7 && event.val1 == 113 && text.size() <= 3
                  && std::all_of(text.begin(), text.end(),
                                 [](unsigned char c) { return c >= '0' && c <= '9'; }))
             bFrequencySuffix_ = text, updateBfrequency(), changed = true;
-        else if (line == 6 && event.val1 == 2 && text.size() <= 4) b_.memory = text, changed = true;
-        else if (line == 5 && event.val1 == 36) b_.name = text, changed = true;
-        else if (line == 6 && event.val1 == 152 && validMode(text)) b_.mode = text, changed = true;
-        else if (line == 6 && event.val1 == 152
+        else if (line >= 4 && line <= 7 && event.val1 == 2 && text.size() <= 4) b_.memory = text, changed = true;
+        else if (line >= 4 && line <= 7 && event.val1 == 36) b_.name = text, changed = true;
+        else if (line >= 4 && line <= 7 && event.val1 == 152 && validMode(text)) b_.mode = text, changed = true;
+        else if (line >= 4 && line <= 7 && event.val1 == 152
                  && (text == "CT" || text == "DCS" || text == "DCR"))
             b_.mode = "FM", changed = true;
-        else if (line == 6 && event.val1 == 174) {
+        else if (line >= 4 && line <= 7 && event.val1 == 174) {
             b_.power = text;
             if (b_.mode.empty()) b_.mode = "FM";
             changed = true;

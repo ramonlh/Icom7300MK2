@@ -1,5 +1,41 @@
 # Protocolo del probe 0.1
 
+## Ampliación de tonos por menús (19 de septiembre de 2026)
+
+El probe permanece pasivo. El servidor con permiso de teclado admite consulta y
+ajuste de CTCSS/DCS mediante KeyPress `0x0801`. Referencia de firmware 0.32.21q:
+`ui/menu.c`, `app/menu.c`, `dcs.c`, `ui/helper.c` y `settings.c`.
+
+Menús numerados 03 RxDCS, 04 RxCTCS, 05 TxDCS y 06 TxCTCS. Se navega con
+EXIT/EXIT/MENU/0/número, con liberación 19 después de cada pulsación y 120 ms
+entre tramas. No se cambia de VFO implícitamente. La escritura solo empieza
+cuando se observa el título seleccionado (UI tipo 0, x=0, línea=2), su valor
+(tipo 0, x>=50, línea=2) y el índice (tipo 1, x=105, línea=0) del mismo redibujado.
+Estos campos coinciden en las disposiciones original y CUSTOM_MENU_LAYOUT del
+firmware cuando no se está editando. Los menús adyacentes no validan el título.
+
+Dentro del ajuste, CTCSS emplea dos dígitos 00–50; DCS tres dígitos 000–208.
+00/000 es OFF, CTCSS 1–50 son los índices EEPROM + 1; DCS 1–104 es normal,
+105–208 invertido. El código DCS se presenta en octal (por ejemplo, índice 0:
+D023N/D023I), nunca como su valor decimal interno. Desactivar una familia no
+desactiva la otra: OFF ejecuta ambos menús. MENU acepta y EXIT sale; después
+se navega de nuevo para leer el valor aceptado, y finalmente se consultan los
+cuatro menús para publicar RX/TX. La lectura no acepta ningún ajuste.
+
+Timeout de observación de 2,5 s, escritura serie bloqueada de 3 s, estado RX/TX
+de menos de 5 s. Cancelación ante TX, cambio observado de VFO, pérdida de estado,
+fuente o cliente. La salida intenta liberar tecla y cancelar menú, sin aceptar
+ajustes pendientes. Un ajuste ya aceptado antes de un fallo no se revierte:
+queda sin confirmar y debe volver a leerse. UI no tiene checksum; la validación
+de título, índice y valor reduce errores, pero no equivale a un ACK del protocolo.
+Pruebas PTY disponibles; comprobación física pendiente.
+
+No se añade WriteEeprom. La aceptación de menú hace que el firmware guarde el
+VFO mediante SETTINGS_SaveChannel; en MR Mode=1 no sobrescribe el registro de
+memoria. No se ejecuta el menú ChSave ni se modifica firmware.
+
+Los apartados siguientes conservan el historial del desarrollo.
+
 Referencia inspeccionada: QuanshengDock 0.32.22q, commit
 `832e2fc9473de5035a8140cf17289c8d1ca2a1bc`, `Serial/Comms.cs` y `Serial/Packet.cs`.
 El clon bajo `reference/` es de solo lectura y no se necesita para compilar.

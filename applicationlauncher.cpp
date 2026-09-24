@@ -155,6 +155,8 @@ ApplicationLauncher::ApplicationLauncher(QObject *parent)
     m_lanPassword = settings.value("lan/password", m_lanPassword).toString();
     m_lanConnectionEnabled = settings.value("connection/type", settings.value("lan/enabled", false).toBool() ? 1 : 0).toInt() == 1;
     m_lastRadioTab = std::clamp(settings.value(QStringLiteral("ui/lastRadioTab"), 0).toInt(), 0, 1);
+    m_icomPanelVisible = settings.value(QStringLiteral("ui/icomPanelVisible"), true).toBool();
+    m_quanshengPanelVisible = settings.value(QStringLiteral("ui/quanshengPanelVisible"), true).toBool();
     m_decodiumProcess->setStandardOutputFile(QProcess::nullDevice());
     m_decodiumProcess->setStandardErrorFile(QProcess::nullDevice());
     connect(m_decodiumProcess, &QProcess::started,
@@ -358,6 +360,23 @@ void ApplicationLauncher::setBandMemoriesJson(const QString &value)
     settings.setValue(QStringLiteral("bands/memoriesJson"), value);
     settings.sync();
     emit bandMemoriesChanged();
+}
+
+QString ApplicationLauncher::quanshengBandMemoriesJson() const
+{
+    return QSettings().value(QStringLiteral("quansheng/bandMemoriesJson"), QStringLiteral("{}"))
+        .toString();
+}
+
+void ApplicationLauncher::setQuanshengBandMemoriesJson(const QString &value)
+{
+    if (value.isEmpty()) return;
+    QSettings settings;
+    if (settings.value(QStringLiteral("quansheng/bandMemoriesJson"), QStringLiteral("{}")) == value)
+        return;
+    settings.setValue(QStringLiteral("quansheng/bandMemoriesJson"), value);
+    settings.sync();
+    emit quanshengBandMemoriesChanged();
 }
 bool ApplicationLauncher::lanConnected() const { return m_lanConnected; }
 bool ApplicationLauncher::lanDataEnabled() const { return m_lanDataEnabled; }
@@ -1838,6 +1857,34 @@ void ApplicationLauncher::setLastRadioTab(int value)
     m_lastRadioTab = value;
     QSettings().setValue(QStringLiteral("ui/lastRadioTab"), value);
     emit lastRadioTabChanged();
+}
+
+bool ApplicationLauncher::icomPanelVisible() const
+{
+    return m_icomPanelVisible;
+}
+
+void ApplicationLauncher::setIcomPanelVisible(bool value)
+{
+    if (value == m_icomPanelVisible)
+        return;
+    m_icomPanelVisible = value;
+    QSettings().setValue(QStringLiteral("ui/icomPanelVisible"), value);
+    emit radioPanelsVisibilityChanged();
+}
+
+bool ApplicationLauncher::quanshengPanelVisible() const
+{
+    return m_quanshengPanelVisible;
+}
+
+void ApplicationLauncher::setQuanshengPanelVisible(bool value)
+{
+    if (value == m_quanshengPanelVisible)
+        return;
+    m_quanshengPanelVisible = value;
+    QSettings().setValue(QStringLiteral("ui/quanshengPanelVisible"), value);
+    emit radioPanelsVisibilityChanged();
 }
 
 bool ApplicationLauncher::decodiumRunning() const

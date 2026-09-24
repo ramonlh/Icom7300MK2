@@ -7,14 +7,19 @@ import QtQml.Models 2.15
 ApplicationWindow {
     id: window
 
-    width: 1120
+    readonly property int radioPanelsPreferredWidth:
+        (applicationLauncher.icomPanelVisible ? 900 : 0)
+        + (applicationLauncher.quanshengPanelVisible ? 550 : 0)
+        + (applicationLauncher.icomPanelVisible && applicationLauncher.quanshengPanelVisible ? 8 : 0)
+        + 24
+    width: Math.max(1450, radioPanelsPreferredWidth)
     height: 880
-    minimumWidth: 1050
+    minimumWidth: Math.max(1450, radioPanelsPreferredWidth)
     minimumHeight: 880
     maximumHeight: 880
 
     visible: true
-    title: "Control IC-7300MK2 · Versión 1.2.12 · Compilado " + buildTimestamp
+    title: "Control IC-7300MK2 / Quansheng UV-K5 · Versión 1.2.12 · Compilado " + buildTimestamp
     color: "#454545"
 
     property bool diagnosticsVisible: false
@@ -34,6 +39,10 @@ ApplicationWindow {
     property bool scannerVisible: false
     property bool memoryQuickPanelVisible: false
     property string lanLogText: ""
+    property string generalLogText: ""
+    property string generalLogFilter: "TODOS"
+    property string lastQuanshengToneLog: ""
+    property string lastQuanshengEepromStatus: ""
     property int memoryQuickSelectedChannel: 1
     property int pendingMemoryStoreChannel: 1
     property int pendingMemoryClearChannel: 1
@@ -50,6 +59,74 @@ ApplicationWindow {
 
     onSelectedRadioTabChanged: {
         applicationLauncher.lastRadioTab = selectedRadioTab
+    }
+
+    function appendGeneralLog(scope, text) {
+        if (!text || String(text).trim() === "")
+            return
+        var now = new Date()
+        var stamp = Qt.formatTime(now, "HH:mm:ss")
+        var line = stamp + " · " + scope + " · " + String(text).replace(/\n/g, " ")
+        generalLogText = (generalLogText ? generalLogText + "\n" : "") + line
+        var lines = generalLogText.split("\n")
+        if (lines.length > 400)
+            generalLogText = lines.slice(lines.length - 400).join("\n")
+    }
+
+    function visibleGeneralLog() {
+        if (generalLogFilter === "TODOS")
+            return generalLogText || "Sin actividad registrada"
+        var lines = generalLogText.split("\n")
+        var result = []
+        for (var i = 0; i < lines.length; ++i) {
+            if (lines[i].indexOf(" · " + generalLogFilter + " · ") >= 0)
+                result.push(lines[i])
+        }
+        return result.length ? result.join("\n") : "Sin entradas para este ámbito"
+    }
+
+    Connections {
+        target: radioController
+
+        function onTrafficChanged() {
+            appendGeneralLog("ICOM", "TX " + radioController.lastTx + " | RX " + radioController.lastRx)
+        }
+        function onStatusChanged() {
+            appendGeneralLog("ICOM", radioController.status)
+        }
+        function onActionStatusChanged() {
+            var status = radioController.actionStatus
+            var scope = status.toLowerCase().indexOf("registro") >= 0
+                    || status.toLowerCase().indexOf("memoria") >= 0
+                    ? "REGISTROS" : "ICOM"
+            appendGeneralLog(scope, status)
+        }
+    }
+
+    Connections {
+        target: quanshengClient
+
+        function onStateChanged() {
+            var toneLog = quanshengClient.toneLog
+            if (toneLog !== lastQuanshengToneLog) {
+                var toneLines = toneLog.split("\n")
+                if (toneLines.length && toneLines[toneLines.length - 1] !== "")
+                    appendGeneralLog("TONOS", toneLines[toneLines.length - 1])
+                lastQuanshengToneLog = toneLog
+            }
+            var eepromStatus = quanshengClient.eepromStatus
+            if (eepromStatus !== lastQuanshengEepromStatus) {
+                if (eepromStatus)
+                    appendGeneralLog("EEPROM", eepromStatus)
+                lastQuanshengEepromStatus = eepromStatus
+            }
+        }
+        function onConnectedChanged() {
+            appendGeneralLog("QUANSHENG", quanshengClient.connected ? "Conectado" : "Desconectado")
+        }
+        function onErrorChanged() {
+            appendGeneralLog("QUANSHENG", quanshengClient.error)
+        }
     }
 
     Component.onCompleted: {
@@ -574,21 +651,30 @@ ApplicationWindow {
 
     // Bandas de recepción que corresponden al rango del UV-K5.
     property var quanshengBandDefinitions: [
-        { name: "F1", label: "50–76 MHz", frequency: 50.000 },
-        { name: "F2", label: "108–137 MHz", frequency: 108.000 },
-        { name: "F3", label: "137–174 MHz", frequency: 145.000 },
-        { name: "F4", label: "174–350 MHz", frequency: 174.000 },
-        { name: "F5", label: "350–400 MHz", frequency: 350.000 },
-        { name: "F6", label: "400–470 MHz", frequency: 433.000 },
-        { name: "F7", label: "470–1300 MHz", frequency: 470.000 }
+        { name: "F1", label: "50–76 MHz", minimum: 50, maximum: 76, frequency: 50.000 },
+        { name: "F2", label: "108–137 MHz", minimum: 108, maximum: 137, frequency: 108.000 },
+        { name: "F3", label: "137–174 MHz", minimum: 137, maximum: 174, frequency: 145.000 },
+        { name: "VHF", label: "144–146 MHz", minimum: 144, maximum: 146, frequency: 145.000 },
+        { name: "F4", label: "174–350 MHz", minimum: 174, maximum: 350, frequency: 174.000 },
+        { name: "F5", label: "350–400 MHz", minimum: 350, maximum: 400, frequency: 350.000 },
+        { name: "F6", label: "400–470 MHz", minimum: 400, maximum: 470, frequency: 433.000 },
+        { name: "UHF", label: "430–440 MHz", minimum: 430, maximum: 440, frequency: 433.000 },
+        { name: "F7", label: "470–1300 MHz", minimum: 470, maximum: 1300, frequency: 470.000 }
     ]
 
     property var bandMemories: JSON.parse(applicationLauncher.bandMemoriesJson)
+    property var quanshengBandMemories: JSON.parse(applicationLauncher.quanshengBandMemoriesJson)
+    property string activeQuanshengBandName: ""
+    property var pendingQuanshengBandRestore: null
     property string currentBandName:
         bandNameForFrequency(activeVfoFrequencyHz())
 
     onBandMemoriesChanged: {
         applicationLauncher.bandMemoriesJson = JSON.stringify(bandMemories)
+    }
+
+    onQuanshengBandMemoriesChanged: {
+        applicationLauncher.quanshengBandMemoriesJson = JSON.stringify(quanshengBandMemories)
     }
 
     ListModel {
@@ -882,6 +968,180 @@ ApplicationWindow {
                   : "La primera vez usa "
                     + formatBandFrequency(band.defaultHz)
                     + ".")
+    }
+
+    function quanshengBandByName(name) {
+        for (let index = 0; index < quanshengBandDefinitions.length; ++index) {
+            const band = quanshengBandDefinitions[index]
+            if (band.name === name)
+                return band
+        }
+        return null
+    }
+
+    function quanshengBandNameForFrequency(mhz) {
+        const frequency = Number(mhz)
+        if (!isFinite(frequency))
+            return ""
+        if (frequency >= 144 && frequency <= 146)
+            return "VHF"
+        if (frequency >= 430 && frequency <= 440)
+            return "UHF"
+        if (frequency >= 50 && frequency <= 76)
+            return "F1"
+        if (frequency >= 108 && frequency <= 137)
+            return "F2"
+        if (frequency >= 137 && frequency <= 174)
+            return "F3"
+        if (frequency >= 174 && frequency <= 350)
+            return "F4"
+        if (frequency >= 350 && frequency <= 400)
+            return "F5"
+        if (frequency >= 400 && frequency <= 470)
+            return "F6"
+        if (frequency >= 470 && frequency <= 1300)
+            return "F7"
+        return ""
+    }
+
+    function quanshengBandMemoryKey(vfo, bandName) {
+        return String(vfo || "A") + ":" + bandName
+    }
+
+    function currentQuanshengVfoState(vfo) {
+        const isB = vfo === "B"
+        const frequency = Number(String(isB ? quanshengClient.vfoBFrequencyText
+                                            : quanshengClient.vfoAFrequencyText).replace(",", "."))
+        return {
+            frequency: frequency,
+            mode: isB ? quanshengClient.vfoBMode : quanshengClient.vfoAMode,
+            power: isB ? quanshengClient.vfoBPower : quanshengClient.vfoAPower,
+            step: isB ? quanshengClient.vfoBStep : quanshengClient.vfoAStep,
+            memory: isB ? quanshengClient.vfoBMemory : quanshengClient.vfoAMemory,
+            name: isB ? quanshengClient.vfoBName : quanshengClient.vfoAName,
+            tones: quanshengClient.toneStates[vfo] || null
+        }
+    }
+
+    function rememberQuanshengBandState(vfo) {
+        if (vfo !== "A" && vfo !== "B")
+            return
+        const state = currentQuanshengVfoState(vfo)
+        if (!quanshengPopup.frequencyAllowed(state.frequency))
+            return
+        let bandName = activeQuanshengBandName
+        if (!bandName && quanshengBandByName(state.memory))
+            bandName = state.memory
+        const activeBand = quanshengBandByName(bandName)
+        if (!activeBand || state.frequency < activeBand.minimum
+                || state.frequency > activeBand.maximum) {
+            bandName = quanshengBandNameForFrequency(state.frequency)
+        }
+        if (!bandName)
+            return
+        const key = quanshengBandMemoryKey(vfo, bandName)
+        const updated = ({})
+        for (const storedKey in quanshengBandMemories)
+            updated[storedKey] = quanshengBandMemories[storedKey]
+        updated[key] = {
+            frequency: state.frequency,
+            mode: state.mode || "",
+            power: state.power || "",
+            step: state.step || "",
+            memory: state.memory || "",
+            name: state.name || "",
+            tones: state.tones || null
+        }
+        quanshengBandMemories = updated
+    }
+
+    function selectQuanshengBand(band) {
+        if (!quanshengClient.connected || !quanshengClient.frequencyControlAvailable
+                || quanshengClient.controlBusy)
+            return
+        if (!band)
+            return
+        const vfo = quanshengClient.activeVfo === "B" ? "B" : "A"
+        const key = quanshengBandMemoryKey(vfo, band.name)
+        const remembered = quanshengBandMemories[key]
+        const targetFrequency = remembered && remembered.frequency !== undefined
+            ? Number(remembered.frequency)
+            : Number(band.frequency)
+        activeQuanshengBandName = band.name
+        pendingQuanshengBandRestore = {
+            vfo: vfo,
+            frequency: targetFrequency,
+            mode: remembered ? remembered.mode || "" : "",
+            tones: remembered ? remembered.tones || null : null,
+            stage: "frequency"
+        }
+        if (quanshengPopup.vfoInMemoryMode(vfo)) {
+            pendingQuanshengBandRestore.stage = "vfoMode"
+            quanshengClient.toggleVfoMode(vfo)
+            return
+        }
+        quanshengClient.setFrequency(targetFrequency.toFixed(6))
+    }
+
+    function advanceQuanshengBandRestore() {
+        const restore = pendingQuanshengBandRestore
+        if (!restore || quanshengClient.controlBusy || !quanshengClient.connected
+                || !quanshengClient.frequencyControlAvailable)
+            return
+        if (restore.vfo !== quanshengClient.activeVfo)
+            return
+        if (restore.stage === "vfoMode") {
+            if (quanshengPopup.vfoInMemoryMode(restore.vfo))
+                return
+            restore.stage = "frequency"
+            quanshengClient.setFrequency(Number(restore.frequency).toFixed(6))
+            return
+        }
+        const current = Number(String(restore.vfo === "B"
+                                     ? quanshengClient.vfoBFrequencyText
+                                     : quanshengClient.vfoAFrequencyText).replace(",", "."))
+        if (!isFinite(current) || Math.abs(current - Number(restore.frequency)) > 0.0005)
+            return
+        if (restore.stage === "frequency") {
+            restore.stage = "mode"
+            const currentMode = restore.vfo === "B" ? quanshengClient.vfoBMode : quanshengClient.vfoAMode
+            if (restore.mode && currentMode !== restore.mode) {
+                quanshengClient.setMode(restore.vfo, restore.mode)
+                return
+            }
+        }
+        if (restore.stage === "mode") {
+            restore.stage = "toneRx"
+            const rx = restore.tones && restore.tones.rx
+            if (rx && quanshengClient.toneControlAvailable) {
+                quanshengClient.setTone(restore.vfo, "RX", Number(rx.type), Number(rx.index))
+                return
+            }
+        }
+        if (restore.stage === "toneRx") {
+            restore.stage = "toneTx"
+            const tx = restore.tones && restore.tones.tx
+            if (tx && quanshengClient.toneControlAvailable) {
+                quanshengClient.setTone(restore.vfo, "TX", Number(tx.type), Number(tx.index))
+                return
+            }
+        }
+        pendingQuanshengBandRestore = null
+    }
+
+    function quanshengBandButtonHelp(modelData) {
+        const vfo = quanshengClient.activeVfo === "B" ? "B" : "A"
+        const remembered = quanshengBandMemories[quanshengBandMemoryKey(vfo, modelData.name)]
+        if (!remembered)
+            return modelData.label + " · primera vez " + Number(modelData.frequency).toFixed(3) + " MHz"
+        const parts = [modelData.label, Number(remembered.frequency).toFixed(6) + " MHz"]
+        if (remembered.mode)
+            parts.push(remembered.mode)
+        if (remembered.power)
+            parts.push("Pwr " + remembered.power)
+        if (remembered.tones && remembered.tones.rx && remembered.tones.tx)
+            parts.push("RX " + remembered.tones.rx.text + " / TX " + remembered.tones.tx.text)
+        return parts.join(" · ")
     }
 
     function controlsEnabled() {
@@ -1420,6 +1680,15 @@ ApplicationWindow {
         return power === "H" ? "High" : power === "M" ? "Med" : power === "L" ? "Low" : (power || "—")
     }
 
+    function quanshengToneDisplay(vfo) {
+        var state = quanshengClient.toneStates[vfo]
+        if (!state || !state.rx || !state.tx)
+            return "Tonos: sin leer"
+        var memory = state.memory || "VFO"
+        return "RX " + state.rx.text + " · TX " + state.tx.text + " · "
+               + (memory === "VFO" ? "VFO" : memory)
+    }
+
     function quanshengBatteryColor() {
         var p = quanshengClient.batteryPercent
         return p < 0 ? "#65747b" : p <= 20 ? "#e74c3c" : p <= 45 ? "#e67e22" : p <= 70 ? "#f1c40f" : "#2ecc71"
@@ -1505,7 +1774,7 @@ ApplicationWindow {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.margins: 0
-        visible: selectedRadioTab === 1
+        visible: applicationLauncher.quanshengPanelVisible
         color: "#414141"
         border.color: "#5886ad"
         border.width: 1
@@ -1514,14 +1783,20 @@ ApplicationWindow {
         property int rightPadding: 12
         property real candidateFrequencyMHz: 145.675
         property bool candidateFrequencyTouched: false
+        property real editedFrequencyAMHz: 145.675
+        property real editedFrequencyBMHz: 145.675
+        property bool editedFrequencyATouched: false
+        property bool editedFrequencyBTouched: false
 
-        function open() { selectedRadioTab = 1 }
+        function open() { applicationLauncher.quanshengPanelVisible = true }
         function close() {
             if (!applicationClosing)
-                selectedRadioTab = 0
+                applicationLauncher.quanshengPanelVisible = false
         }
 
         function syncCandidateFrequency() {
+            syncEditedFrequency("A")
+            syncEditedFrequency("B")
             if (candidateFrequencyTouched)
                 return
             var text = quanshengClient.activeVfo === "B"
@@ -1530,6 +1805,73 @@ ApplicationWindow {
             var value = Number(String(text).replace(",", "."))
             if (frequencyAllowed(value))
                 candidateFrequencyMHz = value
+        }
+
+        function editedFrequency(vfo) {
+            return vfo === "B" ? editedFrequencyBMHz : editedFrequencyAMHz
+        }
+
+        function editedFrequencyTouched(vfo) {
+            return vfo === "B" ? editedFrequencyBTouched : editedFrequencyATouched
+        }
+
+        function setEditedFrequency(vfo, value) {
+            if (vfo === "B") {
+                editedFrequencyBMHz = value
+                editedFrequencyBTouched = true
+            } else {
+                editedFrequencyAMHz = value
+                editedFrequencyATouched = true
+            }
+        }
+
+        function syncEditedFrequency(vfo) {
+            var text = vfo === "B"
+                       ? quanshengClient.vfoBFrequencyText
+                       : quanshengClient.vfoAFrequencyText
+            var value = Number(String(text).replace(",", "."))
+            if (!frequencyAllowed(value))
+                return
+            var current = editedFrequency(vfo)
+            if (!editedFrequencyTouched(vfo) || Math.abs(current - value) < 0.0000005) {
+                if (vfo === "B") {
+                    editedFrequencyBMHz = value
+                    editedFrequencyBTouched = false
+                } else {
+                    editedFrequencyAMHz = value
+                    editedFrequencyATouched = false
+                }
+            }
+        }
+
+        function editedFrequencyDisplay(vfo) {
+            return formatQuanshengFrequency(editedFrequency(vfo).toFixed(6))
+        }
+
+        function adjustEditedFrequencyAt(vfo, x, width, direction) {
+            var shown = editedFrequencyDisplay(vfo)
+            var position = Math.max(0, Math.min(shown.length - 1,
+                Math.floor(x / Math.max(1, width) * shown.length)))
+            while (position < shown.length && shown.charAt(position) === ".")
+                ++position
+            if (position >= shown.length)
+                return
+            var digitsRight = 0
+            for (var index = position + 1; index < shown.length; ++index)
+                if (shown.charAt(index) !== ".")
+                    ++digitsRight
+            var increment = digitsRight <= 4
+                    ? frequencyStepMHz()
+                    : Math.pow(10, digitsRight - 6)
+            setEditedFrequency(vfo, snapCandidate(editedFrequency(vfo) + direction * increment))
+        }
+
+        function validateEditedFrequency(vfo) {
+            if (vfo !== quanshengClient.activeVfo
+                    || activeVfoInMemoryMode()
+                    || !frequencyAllowed(editedFrequency(vfo)))
+                return
+            quanshengClient.setFrequency(editedFrequency(vfo).toFixed(6))
         }
 
         function activeFrequencyMHz() {
@@ -1547,6 +1889,13 @@ ApplicationWindow {
 
         function activeVfoInMemoryMode() {
             var memory = quanshengClient.activeVfo === "B"
+                         ? quanshengClient.vfoBMemory
+                         : quanshengClient.vfoAMemory
+            return memory === "Memoria" || String(memory).startsWith("M")
+        }
+
+        function vfoInMemoryMode(vfo) {
+            var memory = vfo === "B"
                          ? quanshengClient.vfoBMemory
                          : quanshengClient.vfoAMemory
             return memory === "Memoria" || String(memory).startsWith("M")
@@ -1608,18 +1957,25 @@ ApplicationWindow {
         }
         Connections {
             target: quanshengClient
-            function onStateChanged() { quanshengPopup.syncCandidateFrequency() }
+            function onStateChanged() {
+                quanshengPopup.syncCandidateFrequency()
+                window.rememberQuanshengBandState("A")
+                window.rememberQuanshengBandState("B")
+                window.advanceQuanshengBandRestore()
+            }
         }
 
-        RowLayout {
+        Item {
             anchors.fill: parent
             anchors.margins: 12
-            spacing: 6
 
             FrameBox {
-                Layout.preferredWidth: 118
-                Layout.minimumWidth: 118
-                Layout.maximumWidth: 118
+                visible: false
+                // The old side band column is hidden; it must not reserve
+                // horizontal space in the two-radio layout.
+                Layout.preferredWidth: 0
+                Layout.minimumWidth: 0
+                Layout.maximumWidth: 0
                 Layout.fillHeight: true
                 color: "#2c2c2c"
 
@@ -1697,11 +2053,14 @@ ApplicationWindow {
                 }
             }
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.alignment: Qt.AlignTop
-                spacing: 7
+            ScrollView {
+                anchors.fill: parent
+                clip: true
+                contentWidth: Math.max(0, quanshengPopup.width - 24)
+
+                ColumnLayout {
+                    width: Math.max(0, quanshengPopup.width - 24)
+                    spacing: 7
 
             RowLayout {
                 Layout.fillWidth: true
@@ -1728,74 +2087,163 @@ ApplicationWindow {
                 }
             }
 
-            Rectangle {
+            RowLayout {
                 Layout.fillWidth: true
-                Layout.alignment: Qt.AlignTop
                 Layout.preferredHeight: 27
-                Layout.minimumHeight: 27
-                Layout.maximumHeight: 27
-                color: "#000000"
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 8
-                    anchors.rightMargin: 8
-                    Text {
-                        text: "QUANSHENG"
-                        color: "#dedede"
-                        font.pixelSize: 10
-                    }
-                    Item { Layout.fillWidth: true }
-                    Text {
-                        text: "REMOTE CONTROL SOFTWARE"
-                        color: "#eeeeee"
-                        font.pixelSize: 10
-                        font.bold: true
-                    }
-                    Text {
-                        text: "UV-K5"
-                        color: "#86d8ff"
-                        font.pixelSize: 11
-                        font.bold: true
-                    }
-                    Text {
-                        text: "CONTROL"
-                        color: "#ffffff"
-                        font.pixelSize: 13
-                        font.bold: true
+                spacing: 3
+                Repeater {
+                    model: quanshengBandDefinitions
+                    PanelButton {
+                        id: compactQuanshengBandButton
+                        required property var modelData
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        implicitHeight: 26
+                        text: modelData.name
+                        textPixelSize: 9
+                        readonly property bool quickSubBand:
+                            modelData.name === "VHF" || modelData.name === "UHF"
+                        contentItem: RowLayout {
+                            spacing: 1
+                            Text {
+                                Layout.fillWidth: true
+                                text: modelData.name
+                                color: !compactQuanshengBandButton.enabled ? "#818181"
+                                      : compactQuanshengBandButton.quickSubBand
+                                        ? (compactQuanshengBandButton.selected ? "#fff4bf" : "#ffd36a")
+                                        : "#f1f1f1"
+                                font.pixelSize: 9
+                                font.bold: true
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Text {
+                                Layout.preferredWidth: 38
+                                text: modelData.label.replace(" MHz", "")
+                                color: !compactQuanshengBandButton.enabled ? "#6f777b"
+                                      : compactQuanshengBandButton.quickSubBand
+                                        ? (compactQuanshengBandButton.selected ? "#fff0a0" : "#d6a23a")
+                                        : "#69d6ff"
+                                font.pixelSize: 8
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+                        }
+                        selected: quanshengClient.activeVfo === "A"
+                                  ? activeQuanshengBandName === modelData.name
+                                    || (activeQuanshengBandName === ""
+                                        && String(quanshengClient.vfoAMemory).startsWith(modelData.name))
+                                  : activeQuanshengBandName === modelData.name
+                                    || (activeQuanshengBandName === ""
+                                        && String(quanshengClient.vfoBMemory).startsWith(modelData.name))
+                        activeColor: quickSubBand ? "#8b5f12" : "#4a4a4a"
+                        groupAccentColor: quickSubBand ? "#d49a24" : "#5f8799"
+                        enabled: quanshengClient.connected
+                                 && quanshengClient.frequencyControlAvailable
+                                 && !quanshengClient.controlBusy
+                        ToolTip.visible: hovered
+                        ToolTip.text: quanshengBandButtonHelp(modelData)
+                        onClicked: selectQuanshengBand(modelData)
                     }
                 }
             }
 
             RowLayout {
                 Layout.fillWidth: true
+                Layout.preferredHeight: 30
+                spacing: 6
+                QuanshengActionButton {
+                    text: quanshengClient.pttPressed ? "SOLTAR PTT" : "PTT"
+                    Layout.preferredWidth: 96
+                    enabled: quanshengClient.connected && quanshengClient.txControlAvailable
+                             && (quanshengClient.pttPressed
+                                 || (!quanshengClient.controlBusy && !quanshengClient.eepromBusy))
+                    onPressed: quanshengClient.pressPtt()
+                    onReleased: quanshengClient.releasePtt()
+                    onCanceled: quanshengClient.releasePtt()
+                    background: Rectangle {
+                        radius: 2
+                        color: quanshengClient.pttPressed ? "#a92b2b" : "#2b0d0d"
+                        border.color: parent.enabled ? "#d97878" : "#744545"
+                    }
+                }
+                Label {
+                    text: quanshengClient.pttStatus
+                    color: "#d9b7b7"
+                    font.pixelSize: 9
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+                Button {
+                    id: quanshengVfoSelectButton
+                    text: quanshengClient.activeVfo === "B" ? "VFO B" : "VFO A"
+                    Layout.preferredWidth: 58
+                    Layout.minimumWidth: 58
+                    Layout.maximumWidth: 58
+                    implicitHeight: 27
+                    enabled: quanshengClient.connected
+                             && quanshengClient.frequencyControlAvailable
+                             && !quanshengClient.controlBusy
+                    palette.buttonText: "#102018"
+                    background: Rectangle {
+                        color: quanshengClient.activeVfo === "B" ? "#e0a24d" : "#69c98b"
+                        border.color: quanshengClient.activeVfo === "B" ? "#ffd08a" : "#b9f6ca"
+                        border.width: 1
+                        radius: 2
+                    }
+                    onClicked: quanshengClient.switchVfo()
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Cambiar al VFO "
+                                   + (quanshengClient.activeVfo === "B" ? "A" : "B")
+                }
+                Button {
+                    id: quanshengDwrButton
+                    readonly property bool active: quanshengClient.dualWatchKnown
+                                                  && quanshengClient.dualWatch
+                    text: "DWR"
+                    Layout.preferredWidth: 44
+                    Layout.minimumWidth: 44
+                    Layout.maximumWidth: 44
+                    implicitHeight: 27
+                    enabled: quanshengClient.connected
+                             && quanshengClient.frequencyControlAvailable
+                             && !quanshengClient.controlBusy
+                    palette.buttonText: active ? "#102018" : "#d6e2e7"
+                    background: Rectangle {
+                        color: quanshengDwrButton.active ? "#69c98b" : "#303a3f"
+                        border.color: quanshengDwrButton.active ? "#b9f6ca" : "#65747b"
+                        border.width: quanshengDwrButton.active ? 2 : 1
+                        radius: 2
+                    }
+                    onClicked: quanshengClient.setDualWatch(!quanshengClient.dualWatch)
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Dual Watch"
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
                 spacing: 8
 
                 Rectangle {
-                    Layout.fillWidth: quanshengClient.activeVfo !== "B"
-                    Layout.preferredWidth: quanshengClient.activeVfo !== "B" ? 0 : 300
-                    Layout.minimumWidth: quanshengClient.activeVfo !== "B" ? 0 : 280
-                    Layout.maximumWidth: quanshengClient.activeVfo !== "B" ? 10000 : 300
-                    Layout.preferredHeight: 193
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: 10000
+                    Layout.preferredHeight: 160
+                    Layout.minimumHeight: 160
+                    Layout.maximumHeight: 160
                     color: "#000000"
                     border.color: "#000000"
                     border.width: 0
                     radius: 0
-                    MouseArea {
-                        anchors.fill: parent
-                        enabled: quanshengClient.connected
-                                 && quanshengClient.frequencyControlAvailable
-                                 && !quanshengClient.controlBusy
-                        onClicked: if (quanshengClient.activeVfo !== "A")
-                                       quanshengClient.switchVfo()
-                    }
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 10
+                        anchors.margins: 0
                         spacing: 4
                         RowLayout {
                             Layout.fillWidth: true
                             Label { visible: false; text: "VFO A"; color: quanshengClient.activeVfo === "A" ? "#49bfff" : "#9aa7ad"; font.bold: true; font.pixelSize: quanshengClient.activeVfo === "A" ? 12 : 10 }
-                            Label { visible: quanshengClient.dualWatchKnown && quanshengClient.dualWatch; text: "DWR"; color: "#ffd866"; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignVCenter }
                             Item { Layout.fillWidth: true }
                             Repeater {
                                 model: ["FM", "AM", "USB", "BYP", "RAW"]
@@ -1803,7 +2251,7 @@ ApplicationWindow {
                                     required property string modelData
                                     selected: quanshengClient.vfoAMode === modelData
                                     text: modelData
-                                    Layout.preferredWidth: quanshengClient.activeVfo === "A" ? 48 : 31
+                                    Layout.preferredWidth: 36
                                     Layout.minimumWidth: Layout.preferredWidth
                                     Layout.maximumWidth: Layout.preferredWidth
                                     textPixelSize: 10
@@ -1840,52 +2288,72 @@ ApplicationWindow {
                                     onClicked: if (!modeSelected) quanshengClient.toggleVfoMode("A")
                                 }
                             }
-                        }
-                        Item { Layout.fillWidth: true; Layout.preferredHeight: 27; Layout.minimumHeight: 27; Layout.maximumHeight: 27 }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 3
-                            visible: false
-                            Repeater {
-                                model: ["FM", "AM", "USB", "BYP", "RAW"]
-                                PanelButton {
-                                    id: compactModeAButton
-                                    required property string modelData
-                                    readonly property bool modeSelected: quanshengClient.vfoAMode === modelData
-                                    text: modelData
-                                    enabled: modelData !== "BYP" && modelData !== "RAW"
-                                             && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy
-                                    Layout.preferredWidth: quanshengClient.activeVfo === "A" ? 48 : 31
-                                    Layout.minimumWidth: quanshengClient.activeVfo === "A" ? 48 : 31
-                                    Layout.maximumWidth: quanshengClient.activeVfo === "A" ? 48 : 31
-                                    implicitHeight: 23
-                                    padding: 2
-                                    font.pixelSize: 10
-                                    selected: modeSelected
-                                    activeColor: "#2f72b9"
-                                    groupAccentColor: "#5f8799"
-                                    textPixelSize: 10
-                                    onClicked: if (!modeSelected) quanshengClient.setMode("A", modelData)
-                                }
+                            Label {
+                                opacity: quanshengClient.vfoAMemory === "Memoria"
+                                         || quanshengClient.vfoAMemory.startsWith("M") ? 1 : 0
+                                text: (quanshengClient.vfoAMemory || "—") + " · " + (quanshengClient.vfoAName || "")
+                                color: "#f4fbff"
+                                font.pixelSize: 13
+                                font.bold: true
+                                elide: Text.ElideRight
+                                horizontalAlignment: Text.AlignRight
+                                Layout.preferredWidth: 125
+                                Layout.minimumWidth: 0
+                                Layout.maximumWidth: 150
+                            }
+                            Button {
+                                opacity: quanshengClient.vfoAMemory === "Memoria"
+                                         || quanshengClient.vfoAMemory.startsWith("M") ? 1 : 0
+                                text: "▲"
+                                enabled: (quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M")) && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy
+                                implicitWidth: 25; implicitHeight: 24; padding: 1; font.pixelSize: 9
+                                onClicked: quanshengClient.stepMemory("A", true)
+                            }
+                            Button {
+                                opacity: quanshengClient.vfoAMemory === "Memoria"
+                                         || quanshengClient.vfoAMemory.startsWith("M") ? 1 : 0
+                                text: "▼"
+                                enabled: (quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M")) && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy
+                                implicitWidth: 25; implicitHeight: 24; padding: 1; font.pixelSize: 9
+                                onClicked: quanshengClient.stepMemory("A", false)
                             }
                         }
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 76
-                            Layout.minimumHeight: 76
-                            Layout.maximumHeight: 76
-                            color: quanshengClient.activeVfo === "A" ? "#041014" : "#070707"
-                            border.color: quanshengClient.activeVfo === "A" ? "#347e98" : "#4b4b4b"
+                            Layout.preferredHeight: 60
+                            Layout.minimumHeight: 60
+                            Layout.maximumHeight: 60
+                            color: quanshengClient.activeVfo === "A" ? "#06202b" : "#090909"
+                            border.color: quanshengClient.activeVfo === "A" ? "#42bfff" : "#4b4b4b"
                             border.width: 1
                             FrequencyDigits {
                                 anchors.centerIn: parent
                                 vfoNumber: 0
-                                frequencyValue: quanshengClient.vfoAFrequencyText !== ""
-                                                 ? formatQuanshengFrequency(quanshengClient.vfoAFrequencyText)
-                                                 : "—"
-                                large: quanshengClient.activeVfo === "A"
+                                frequencyValue: quanshengPopup.editedFrequencyDisplay("A")
+                                large: true
                                 active: quanshengClient.activeVfo === "A"
-                                wheelEnabled: false
+                                wheelEnabled: quanshengClient.connected
+                                              && quanshengClient.frequencyControlAvailable
+                                              && !quanshengClient.controlBusy
+                                wheelFunction: function(x, width, direction) {
+                                    quanshengPopup.adjustEditedFrequencyAt("A", x, width, direction)
+                                }
+                            }
+                            QuanshengActionButton {
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.topMargin: 3
+                                text: "Validar"
+                                Layout.preferredWidth: 60
+                                enabled: quanshengClient.connected
+                                         && quanshengClient.activeVfo === "A"
+                                         && quanshengClient.frequencyControlAvailable
+                                         && !quanshengClient.controlBusy
+                                         && !quanshengPopup.activeVfoInMemoryMode()
+                                         && quanshengPopup.frequencyAllowed(quanshengPopup.editedFrequencyAMHz)
+                                onClicked: quanshengPopup.validateEditedFrequency("A")
+                                ToolTip.visible: hovered && !enabled
+                                ToolTip.text: "Seleccione VFO A y cambie a modo VFO para validar la frecuencia."
                             }
                             Rectangle {
                                 anchors.left: parent.left
@@ -1917,10 +2385,22 @@ ApplicationWindow {
                                 font.bold: true
                             }
                         }
+                        Text {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 14
+                            Layout.minimumHeight: 14
+                            Layout.maximumHeight: 14
+                            text: window.quanshengToneDisplay("A")
+                            color: quanshengClient.toneStates.A ? "#9fbcc6" : "#8f9da3"
+                            font.pixelSize: 12
+                            font.bold: true
+                            elide: Text.ElideRight
+                        }
                         RowLayout {
-                            visible: quanshengClient.activeVfo === "A"
+                            visible: false
                             Layout.fillWidth: true
                             spacing: 5
+                            transform: Translate { y: -12 }
                             Item { Layout.fillWidth: true }
                             Text {
                                 Layout.preferredWidth: 300
@@ -1935,7 +2415,12 @@ ApplicationWindow {
                                 font.bold: true
                                 horizontalAlignment: Text.AlignRight
                                 property real cursorX: width / 2
-                                HoverHandler { onPointChanged: candidateTextA.cursorX = point.position.x }
+                                HoverHandler {
+                                    id: candidateHoverA
+                                    onPointChanged: candidateTextA.cursorX = point.position.x
+                                }
+                                ToolTip.visible: candidateHoverA.hovered
+                                ToolTip.text: "Rueda sobre este dígito para ajustarlo; pulse Validar / enviar para transmitir la frecuencia."
                                 MouseArea {
                                     anchors.fill: parent
                                     enabled: false
@@ -1963,20 +2448,24 @@ ApplicationWindow {
                             }
                             Label { text: "Paso " + (quanshengClient.vfoAStep || "—"); color: "#9da8ad"; font.pixelSize: 11; font.bold: true }
                             QuanshengActionButton {
-                                text: "Enviar…"
+                                text: "Validar\nenviar"
+                                Layout.preferredWidth: 82
+                                Layout.minimumWidth: 82
+                                Layout.maximumWidth: 82
                                 enabled: quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy && !quanshengPopup.activeVfoInMemoryMode() && quanshengPopup.frequencyAllowed(quanshengPopup.activeFrequencyMHz()) && quanshengPopup.frequencyAllowed(quanshengPopup.candidateFrequencyMHz) && Math.abs(quanshengPopup.candidateFrequencyMHz - quanshengPopup.activeFrequencyMHz()) > 0.0000005
                                 onClicked: quanshengClient.setFrequency(quanshengPopup.candidateFrequencyMHz.toFixed(6))
                             }
                         }
-                        Label { text: "Canal / nombre"; opacity: quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M") ? 1 : 0; color: "#83949d"; font.pixelSize: 9 }
+                        Label { visible: false; text: "Canal / nombre"; color: "#83949d"; font.pixelSize: 9 }
                         RowLayout {
-                            opacity: quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M") ? 1 : 0
-                            enabled: opacity > 0
+                            visible: false
+                            opacity: 1
+                            enabled: true
                             Layout.fillWidth: true
                             spacing: 3
-                            Label { text: (quanshengClient.vfoAMemory || "—") + " · " + (quanshengClient.vfoAName || "sin nombre"); color: "#ffffff"; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
-                            Button { text: "▲"; enabled: quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy; implicitWidth: 28; implicitHeight: 24; padding: 2; font.pixelSize: 9; onClicked: quanshengClient.stepMemory("A", true) }
-                            Button { text: "▼"; enabled: quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy; implicitWidth: 28; implicitHeight: 24; padding: 2; font.pixelSize: 9; onClicked: quanshengClient.stepMemory("A", false) }
+                            Label { text: (quanshengClient.vfoAMemory || "—") + " · " + (quanshengClient.vfoAName || "sin nombre"); opacity: quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M") ? 1 : 0.55; color: "#ffffff"; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Button { text: "▲"; enabled: (quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M")) && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy; implicitWidth: 28; implicitHeight: 24; padding: 2; font.pixelSize: 9; onClicked: quanshengClient.stepMemory("A", true) }
+                            Button { text: "▼"; enabled: (quanshengClient.vfoAMemory === "Memoria" || quanshengClient.vfoAMemory.startsWith("M")) && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy; implicitWidth: 28; implicitHeight: 24; padding: 2; font.pixelSize: 9; onClicked: quanshengClient.stepMemory("A", false) }
                         }
                         RowLayout {
                             Layout.fillWidth: true
@@ -2024,31 +2513,23 @@ ApplicationWindow {
                 }
 
                 Rectangle {
-                    Layout.fillWidth: quanshengClient.activeVfo === "B"
-                    Layout.preferredWidth: quanshengClient.activeVfo === "B" ? 0 : 300
-                    Layout.minimumWidth: quanshengClient.activeVfo === "B" ? 0 : 280
-                    Layout.maximumWidth: quanshengClient.activeVfo === "B" ? 10000 : 300
-                    Layout.preferredHeight: 193
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: 10000
+                    Layout.preferredHeight: 160
+                    Layout.minimumHeight: 160
+                    Layout.maximumHeight: 160
                     color: "#000000"
                     border.color: "#000000"
                     border.width: 0
                     radius: 0
-                    MouseArea {
-                        anchors.fill: parent
-                        enabled: quanshengClient.connected
-                                 && quanshengClient.frequencyControlAvailable
-                                 && !quanshengClient.controlBusy
-                        onClicked: if (quanshengClient.activeVfo !== "B")
-                                       quanshengClient.switchVfo()
-                    }
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 10
+                        anchors.margins: 0
                         spacing: 4
                         RowLayout {
                             Layout.fillWidth: true
                             Label { visible: false; text: "VFO B"; color: quanshengClient.activeVfo === "B" ? "#ffb347" : "#9aa7ad"; font.bold: true; font.pixelSize: quanshengClient.activeVfo === "B" ? 12 : 10 }
-                            Label { visible: quanshengClient.dualWatchKnown && quanshengClient.dualWatch; text: "DWR"; color: "#ffd866"; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignVCenter }
                             Item { Layout.fillWidth: true }
                             Repeater {
                                 model: ["FM", "AM", "USB", "BYP", "RAW"]
@@ -2056,7 +2537,7 @@ ApplicationWindow {
                                     required property string modelData
                                     selected: quanshengClient.vfoBMode === modelData
                                     text: modelData
-                                    Layout.preferredWidth: quanshengClient.activeVfo === "B" ? 48 : 31
+                                    Layout.preferredWidth: 36
                                     Layout.minimumWidth: Layout.preferredWidth
                                     Layout.maximumWidth: Layout.preferredWidth
                                     textPixelSize: 10
@@ -2091,52 +2572,72 @@ ApplicationWindow {
                                     onClicked: if (!modeSelected) quanshengClient.toggleVfoMode("B")
                                 }
                             }
-                        }
-                        Item { Layout.fillWidth: true; Layout.preferredHeight: 27; Layout.minimumHeight: 27; Layout.maximumHeight: 27 }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 3
-                            visible: false
-                            Repeater {
-                                model: ["FM", "AM", "USB", "BYP", "RAW"]
-                                PanelButton {
-                                    id: compactModeBButton
-                                    required property string modelData
-                                    readonly property bool modeSelected: quanshengClient.vfoBMode === modelData
-                                    text: modelData
-                                    enabled: modelData !== "BYP" && modelData !== "RAW"
-                                             && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy
-                                    Layout.preferredWidth: quanshengClient.activeVfo === "B" ? 48 : 31
-                                    Layout.minimumWidth: quanshengClient.activeVfo === "B" ? 48 : 31
-                                    Layout.maximumWidth: quanshengClient.activeVfo === "B" ? 48 : 31
-                                    implicitHeight: 23
-                                    padding: 2
-                                    font.pixelSize: 10
-                                    selected: modeSelected
-                                    activeColor: "#2f72b9"
-                                    groupAccentColor: "#5f8799"
-                                    textPixelSize: 10
-                                    onClicked: if (!modeSelected) quanshengClient.setMode("B", modelData)
-                                }
+                            Label {
+                                opacity: quanshengClient.vfoBMemory === "Memoria"
+                                         || quanshengClient.vfoBMemory.startsWith("M") ? 1 : 0
+                                text: (quanshengClient.vfoBMemory || "—") + " · " + (quanshengClient.vfoBName || "")
+                                color: "#f4fbff"
+                                font.pixelSize: 13
+                                font.bold: true
+                                elide: Text.ElideRight
+                                horizontalAlignment: Text.AlignRight
+                                Layout.preferredWidth: 125
+                                Layout.minimumWidth: 0
+                                Layout.maximumWidth: 150
+                            }
+                            Button {
+                                opacity: quanshengClient.vfoBMemory === "Memoria"
+                                         || quanshengClient.vfoBMemory.startsWith("M") ? 1 : 0
+                                text: "▲"
+                                enabled: (quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M")) && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy
+                                implicitWidth: 25; implicitHeight: 24; padding: 1; font.pixelSize: 9
+                                onClicked: quanshengClient.stepMemory("B", true)
+                            }
+                            Button {
+                                opacity: quanshengClient.vfoBMemory === "Memoria"
+                                         || quanshengClient.vfoBMemory.startsWith("M") ? 1 : 0
+                                text: "▼"
+                                enabled: (quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M")) && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy
+                                implicitWidth: 25; implicitHeight: 24; padding: 1; font.pixelSize: 9
+                                onClicked: quanshengClient.stepMemory("B", false)
                             }
                         }
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 76
-                            Layout.minimumHeight: 76
-                            Layout.maximumHeight: 76
-                            color: quanshengClient.activeVfo === "B" ? "#061109" : "#070707"
-                            border.color: quanshengClient.activeVfo === "B" ? "#9a6630" : "#4b4b4b"
+                            Layout.preferredHeight: 60
+                            Layout.minimumHeight: 60
+                            Layout.maximumHeight: 60
+                            color: quanshengClient.activeVfo === "B" ? "#211708" : "#090909"
+                            border.color: quanshengClient.activeVfo === "B" ? "#ffad4d" : "#4b4b4b"
                             border.width: 1
                             FrequencyDigits {
                                 anchors.centerIn: parent
                                 vfoNumber: 1
-                                frequencyValue: quanshengClient.vfoBFrequencyText !== ""
-                                                 ? formatQuanshengFrequency(quanshengClient.vfoBFrequencyText)
-                                                 : "—"
-                                large: quanshengClient.activeVfo === "B"
+                                frequencyValue: quanshengPopup.editedFrequencyDisplay("B")
+                                large: true
                                 active: quanshengClient.activeVfo === "B"
-                                wheelEnabled: false
+                                wheelEnabled: quanshengClient.connected
+                                              && quanshengClient.frequencyControlAvailable
+                                              && !quanshengClient.controlBusy
+                                wheelFunction: function(x, width, direction) {
+                                    quanshengPopup.adjustEditedFrequencyAt("B", x, width, direction)
+                                }
+                            }
+                            QuanshengActionButton {
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.topMargin: 3
+                                text: "Validar"
+                                Layout.preferredWidth: 60
+                                enabled: quanshengClient.connected
+                                         && quanshengClient.activeVfo === "B"
+                                         && quanshengClient.frequencyControlAvailable
+                                         && !quanshengClient.controlBusy
+                                         && !quanshengPopup.activeVfoInMemoryMode()
+                                         && quanshengPopup.frequencyAllowed(quanshengPopup.editedFrequencyBMHz)
+                                onClicked: quanshengPopup.validateEditedFrequency("B")
+                                ToolTip.visible: hovered && !enabled
+                                ToolTip.text: "Seleccione VFO B y cambie a modo VFO para validar la frecuencia."
                             }
                             Rectangle {
                                 anchors.left: parent.left
@@ -2168,10 +2669,22 @@ ApplicationWindow {
                                 font.bold: true
                             }
                         }
+                        Text {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 14
+                            Layout.minimumHeight: 14
+                            Layout.maximumHeight: 14
+                            text: window.quanshengToneDisplay("B")
+                            color: quanshengClient.toneStates.B ? "#9fbcc6" : "#8f9da3"
+                            font.pixelSize: 12
+                            font.bold: true
+                            elide: Text.ElideRight
+                        }
                         RowLayout {
-                            visible: quanshengClient.activeVfo === "B"
+                            visible: false
                             Layout.fillWidth: true
                             spacing: 5
+                            transform: Translate { y: -12 }
                             Item { Layout.fillWidth: true }
                             Text {
                                 Layout.preferredWidth: 260
@@ -2186,7 +2699,12 @@ ApplicationWindow {
                                 font.bold: true
                                 horizontalAlignment: Text.AlignRight
                                 property real cursorX: width / 2
-                                HoverHandler { onPointChanged: candidateTextB.cursorX = point.position.x }
+                                HoverHandler {
+                                    id: candidateHoverB
+                                    onPointChanged: candidateTextB.cursorX = point.position.x
+                                }
+                                ToolTip.visible: candidateHoverB.hovered
+                                ToolTip.text: "Rueda sobre este dígito para ajustarlo; pulse Validar / enviar para transmitir la frecuencia."
                                 MouseArea {
                                     anchors.fill: parent
                                     enabled: false
@@ -2214,20 +2732,24 @@ ApplicationWindow {
                             }
                             Label { text: "Paso " + (quanshengClient.vfoBStep || "—"); color: "#9da8ad"; font.pixelSize: 11; font.bold: true }
                             QuanshengActionButton {
-                                text: "Enviar…"
+                                text: "Validar\nenviar"
+                                Layout.preferredWidth: 82
+                                Layout.minimumWidth: 82
+                                Layout.maximumWidth: 82
                                 enabled: quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy && !quanshengPopup.activeVfoInMemoryMode() && quanshengPopup.frequencyAllowed(quanshengPopup.activeFrequencyMHz()) && quanshengPopup.frequencyAllowed(quanshengPopup.candidateFrequencyMHz) && Math.abs(quanshengPopup.candidateFrequencyMHz - quanshengPopup.activeFrequencyMHz()) > 0.0000005
                                 onClicked: quanshengClient.setFrequency(quanshengPopup.candidateFrequencyMHz.toFixed(6))
                             }
                         }
-                        Label { text: "Canal / función"; opacity: quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M") ? 1 : 0; color: "#83949d"; font.pixelSize: 9 }
+                        Label { visible: false; text: "Canal / función"; color: "#83949d"; font.pixelSize: 9 }
                         RowLayout {
-                            opacity: quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M") ? 1 : 0
-                            enabled: opacity > 0
+                            visible: false
+                            opacity: 1
+                            enabled: true
                             Layout.fillWidth: true
                             spacing: 3
-                            Label { text: (quanshengClient.vfoBMemory || "—") + " · " + (quanshengClient.vfoBName || "sin nombre"); color: "#ffffff"; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
-                            Button { text: "▲"; enabled: quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy; implicitWidth: 28; implicitHeight: 24; padding: 2; font.pixelSize: 9; onClicked: quanshengClient.stepMemory("B", true) }
-                            Button { text: "▼"; enabled: quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy; implicitWidth: 28; implicitHeight: 24; padding: 2; font.pixelSize: 9; onClicked: quanshengClient.stepMemory("B", false) }
+                            Label { text: (quanshengClient.vfoBMemory || "—") + " · " + (quanshengClient.vfoBName || "sin nombre"); opacity: quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M") ? 1 : 0.55; color: "#ffffff"; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Button { text: "▲"; enabled: (quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M")) && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy; implicitWidth: 28; implicitHeight: 24; padding: 2; font.pixelSize: 9; onClicked: quanshengClient.stepMemory("B", true) }
+                            Button { text: "▼"; enabled: (quanshengClient.vfoBMemory === "Memoria" || quanshengClient.vfoBMemory.startsWith("M")) && quanshengClient.connected && quanshengClient.frequencyControlAvailable && !quanshengClient.controlBusy; implicitWidth: 28; implicitHeight: 24; padding: 2; font.pixelSize: 9; onClicked: quanshengClient.stepMemory("B", false) }
                         }
                         RowLayout {
                             Layout.fillWidth: true
@@ -2280,9 +2802,8 @@ ApplicationWindow {
                 Layout.preferredHeight: 104
                 spacing: 8
                 FrameBox {
-                    Layout.preferredWidth: 430
-                    Layout.minimumWidth: 400
-                    Layout.maximumWidth: 430
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     Layout.minimumHeight: 104
                     Layout.preferredHeight: 104
                     Layout.maximumHeight: 104
@@ -2334,9 +2855,9 @@ ApplicationWindow {
                     }
                 }
                 AnalogSMeter {
-                    Layout.preferredWidth: 190
-                    Layout.minimumWidth: 180
-                    Layout.maximumWidth: 195
+                    Layout.preferredWidth: 145
+                    Layout.minimumWidth: 135
+                    Layout.maximumWidth: 150
                     Layout.minimumHeight: 104
                     Layout.preferredHeight: 104
                     Layout.maximumHeight: 104
@@ -2474,63 +2995,54 @@ ApplicationWindow {
                 text: "ESTADO Y RECEPCIÓN"
             }
 
-            GridLayout {
-                columns: 4
+            RowLayout {
                 Layout.fillWidth: true
-                columnSpacing: 8
-                rowSpacing: 3
-                Label { visible: false; text: "Batería"; color: "#aeb9be" }
-                Label { visible: false; text: "—"; color: "#ffffff" }
+                spacing: 6
                 Label { text: "Estado"; color: "#aeb9be" }
                 Label {
                     text: quanshengClient.candidateState || "—"
                     color: "#ffffff"
+                    elide: Text.ElideRight
                 }
                 Label { text: "Eventos"; color: "#aeb9be" }
                 Label { text: String(quanshengClient.eventCount); color: "#ffffff" }
-                Label { text: "TX/PTT"; color: "#aeb9be" }
-                Label { text: quanshengClient.pttStatus; color: "#e06c75" }
-                Label { visible: false; text: "Indicadores"; color: "#aeb9be" }
-                RowLayout {
+                Label {
                     visible: quanshengClient.charging
-                    spacing: 5
-                    Label {
-                        text: ""
-                        color: "#ffffff"
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
-                    Label {
-                        visible: quanshengClient.charging
-                        text: "⚡"
-                        color: "#ffd866"
-                        font.pixelSize: 17
-                        font.bold: true
-                        ToolTip.visible: chargingMouse.containsMouse
-                        ToolTip.text: "Batería cargando"
-                        MouseArea { id: chargingMouse; anchors.fill: parent; hoverEnabled: true }
-                    }
+                    text: "⚡"
+                    color: "#ffd866"
+                    font.pixelSize: 15
+                    font.bold: true
+                    ToolTip.visible: chargingMouse.containsMouse
+                    ToolTip.text: "Batería cargando"
+                    MouseArea { id: chargingMouse; anchors.fill: parent; hoverEnabled: true }
                 }
                 Label { text: "Tono / DTMF"; color: "#aeb9be" }
-                Label { text: (quanshengClient.toneIndicator || "—") + (quanshengClient.lastDtmf ? " · último " + quanshengClient.lastDtmf : ""); color: "#ffffff" }
-                Label { text: "Dual Watch"; color: "#aeb9be" }
-                RowLayout {
-                    spacing: 2
-                    Repeater {
-                        model: [{"label": "OFF", "value": false}, {"label": "ON", "value": true}]
-                        Button {
-                            id: dualWatchButton
-                            required property var modelData
-                            readonly property bool modeSelected: quanshengClient.dualWatchKnown
-                                                                         && quanshengClient.dualWatch === modelData.value
-                            text: modelData.label
-                            enabled: quanshengClient.connected && quanshengClient.frequencyControlAvailable
-                                     && !quanshengClient.controlBusy
-                            implicitWidth: 38; implicitHeight: 23; padding: 2; font.pixelSize: 9
-                            palette.buttonText: modeSelected ? "#102018" : "#d6e2e7"
-                            background: Rectangle { color: dualWatchButton.modeSelected ? "#69c98b" : "#303a3f"; border.color: dualWatchButton.modeSelected ? "#b9f6ca" : "#65747b"; border.width: dualWatchButton.modeSelected ? 2 : 1; radius: 3 }
-                            onClicked: if (!modeSelected) quanshengClient.setDualWatch(modelData.value)
-                        }
+                Label {
+                    text: (quanshengClient.toneIndicator || "—")
+                          + (quanshengClient.lastDtmf ? " · " + quanshengClient.lastDtmf : "")
+                    color: "#ffffff"
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+            }
+
+            RowLayout {
+                visible: false
+                spacing: 2
+                Repeater {
+                    model: [{"label": "OFF", "value": false}, {"label": "ON", "value": true}]
+                    Button {
+                        id: dualWatchButton
+                        required property var modelData
+                        readonly property bool modeSelected: quanshengClient.dualWatchKnown
+                                                                     && quanshengClient.dualWatch === modelData.value
+                        text: modelData.label
+                        enabled: quanshengClient.connected && quanshengClient.frequencyControlAvailable
+                                 && !quanshengClient.controlBusy
+                        implicitWidth: 38; implicitHeight: 23; padding: 2; font.pixelSize: 9
+                        palette.buttonText: modeSelected ? "#102018" : "#d6e2e7"
+                        background: Rectangle { color: dualWatchButton.modeSelected ? "#69c98b" : "#303a3f"; border.color: dualWatchButton.modeSelected ? "#b9f6ca" : "#65747b"; border.width: dualWatchButton.modeSelected ? 2 : 1; radius: 3 }
+                        onClicked: if (!modeSelected) quanshengClient.setDualWatch(modelData.value)
                     }
                 }
             }
@@ -2560,22 +3072,6 @@ ApplicationWindow {
                 Label { text: quanshengClient.hardwareDtmfText || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
                 Label { text: "Generadores tono"; color: "#aeb9be" }
                 Label { text: quanshengClient.hardwareTonesText || "—"; color: "#ffffff"; elide: Text.ElideRight; Layout.fillWidth: true }
-            }
-
-            Label {
-                text: quanshengClient.error || "VFO A y VFO B son observaciones candidatas; el canal aún no está normalizado."
-                color: quanshengClient.error ? "#e06c75" : "#aab4ba"
-                wrapMode: Text.WordWrap
-                Layout.fillWidth: true
-            }
-
-            Label {
-                text: (quanshengClient.frequencyControlAvailable
-                       ? "Control experimental de frecuencia habilitado" : "Frecuencia sin control")
-                      + " · " + quanshengClient.pttStatus
-                color: "#9da8ad"
-                font.pixelSize: 10
-                Layout.fillWidth: true
             }
 
             QuanshengSectionHeader {
@@ -2676,71 +3172,6 @@ ApplicationWindow {
 
             }
 
-            FrameBox {
-                Layout.preferredWidth: 118
-                Layout.minimumWidth: 118
-                Layout.maximumWidth: 118
-                Layout.fillHeight: true
-                color: "#2c2c2c"
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 4
-                    spacing: 4
-
-                    SidePanelGroup {
-                        caption: "BANDAS"
-                        accentColor: "#4d9fc1"
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 3
-                            Repeater {
-                                model: quanshengBandDefinitions
-                                PanelButton {
-                                    id: directQuanshengBandButton
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    implicitHeight: 27
-                                    text: modelData.name
-                                    textPixelSize: 12
-                                    activeColor: "#4a4a4a"
-                                    contentItem: RowLayout {
-                                        spacing: 2
-                                        Text {
-                                            Layout.fillWidth: true
-                                            text: modelData.name
-                                            color: directQuanshengBandButton.enabled ? "#f1f1f1" : "#818181"
-                                            font.pixelSize: 12
-                                            font.bold: true
-                                            horizontalAlignment: Text.AlignHCenter
-                                            verticalAlignment: Text.AlignVCenter
-                                        }
-                                        Text {
-                                            Layout.preferredWidth: 78
-                                            text: modelData.label.replace(" MHz", "")
-                                            color: directQuanshengBandButton.enabled ? "#69d6ff" : "#6f777b"
-                                            font.pixelSize: 10
-                                            font.bold: true
-                                            horizontalAlignment: Text.AlignHCenter
-                                            verticalAlignment: Text.AlignVCenter
-                                            elide: Text.ElideRight
-                                        }
-                                    }
-                                    enabled: quanshengClient.connected
-                                             && quanshengClient.frequencyControlAvailable
-                                             && !quanshengClient.controlBusy
-                                             && !quanshengPopup.activeVfoInMemoryMode()
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: modelData.label
-                                    onClicked: quanshengClient.setFrequency(
-                                                   Number(modelData.frequency).toFixed(6))
-                                }
-                            }
-                        }
-                    }
-                    Item { Layout.fillHeight: true }
-                }
             }
 
         }
@@ -5380,7 +5811,7 @@ ApplicationWindow {
         property bool compact: false
 
         implicitWidth:
-            compact ? 202 : 210
+            compact ? 170 : 178
         implicitHeight:
             compact ? 122 : 150
         color: "#202020"
@@ -5420,9 +5851,10 @@ ApplicationWindow {
                 spacing: 5
 
                 KnobControl {
-                    Layout.fillWidth: true
-                    Layout.minimumWidth: 82
-                    Layout.preferredWidth: 92
+                    Layout.fillWidth: false
+                    Layout.minimumWidth: 80
+                    Layout.preferredWidth: 80
+                    Layout.maximumWidth: 80
                     Layout.fillHeight: true
                     compact: twin.compact
                     caption: "PBT1"
@@ -5437,9 +5869,10 @@ ApplicationWindow {
                 }
 
                 KnobControl {
-                    Layout.fillWidth: true
-                    Layout.minimumWidth: 82
-                    Layout.preferredWidth: 92
+                    Layout.fillWidth: false
+                    Layout.minimumWidth: 80
+                    Layout.preferredWidth: 80
+                    Layout.maximumWidth: 80
                     Layout.fillHeight: true
                     compact: twin.compact
                     caption: "PBT2"
@@ -5604,7 +6037,9 @@ ApplicationWindow {
                 Qt.NoButton
             hoverEnabled: true
             enabled:
-                frequencyDigits.wheelEnabled && controlsEnabled()
+                frequencyDigits.wheelEnabled
+                && (frequencyDigits.wheelFunction
+                    || controlsEnabled())
 
             property int pointedStep:
                 frequencyDigits
@@ -6345,6 +6780,7 @@ ApplicationWindow {
                 }
 
                 PanelButton {
+                    Layout.preferredWidth: 86
                     text: "Actualizar"
                     enabled:
                         radioController.connected
@@ -6358,6 +6794,7 @@ ApplicationWindow {
                 }
 
                 PanelButton {
+                    Layout.preferredWidth: 68
                     text: "Cerrar"
                     tip:
                         "Cierra TONE / RTTY SET."
@@ -6838,6 +7275,7 @@ ApplicationWindow {
                 }
 
                 PanelButton {
+                    Layout.preferredWidth: 86
                     text: "Actualizar"
                     tip:
                         "Lee todos los ajustes CW y las memorias M1–M8."
@@ -6850,6 +7288,7 @@ ApplicationWindow {
                 }
 
                 PanelButton {
+                    Layout.preferredWidth: 86
                     text: "Cerrar"
                     tip: "Cierra CW SET."
                     onClicked:
@@ -7682,6 +8121,7 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
 
                 PanelButton {
+                    Layout.preferredWidth: 86
                     text: "Actualizar"
                     tip: "Vuelve a leer los ajustes TX/AUDIO de la radio."
                     enabled: radioController.connected
@@ -7689,6 +8129,7 @@ ApplicationWindow {
                 }
 
                 PanelButton {
+                    Layout.preferredWidth: 68
                     text: "Cerrar"
                     tip: "Cierra la configuración TX/AUDIO."
                     onClicked:
@@ -9940,7 +10381,7 @@ ApplicationWindow {
 
                                 FrameBox {
                                     Layout.fillWidth: true
-                                    Layout.preferredHeight: 235
+                                    Layout.preferredHeight: 330
                                     color: "#171a1c"
 
                                     GridLayout {
@@ -10014,6 +10455,30 @@ ApplicationWindow {
                                             }
                                         }
 
+                                        CheckBox {
+                                            id: icomPanelVisibleCheck
+                                            Layout.columnSpan: 3
+                                            text: "Mostrar panel Icom en la ventana principal"
+                                            checked: applicationLauncher.icomPanelVisible
+                                            onToggled: applicationLauncher.icomPanelVisible = checked
+                                            palette.text: "#d9e0e4"
+                                        }
+                                        CheckBox {
+                                            id: quanshengPanelVisibleCheck
+                                            Layout.columnSpan: 3
+                                            text: "Mostrar panel Quansheng en la ventana principal"
+                                            checked: applicationLauncher.quanshengPanelVisible
+                                            onToggled: applicationLauncher.quanshengPanelVisible = checked
+                                            palette.text: "#d9e0e4"
+                                        }
+                                        Label {
+                                            Layout.columnSpan: 3
+                                            text: "La disposición acoplada se conserva al reiniciar; las opciones de desacoplar y mover se añadirán a este mismo apartado."
+                                            color: "#9da8ad"
+                                            font.pixelSize: 9
+                                            wrapMode: Text.WordWrap
+                                        }
+
                                         Item { Layout.columnSpan: 3; Layout.preferredHeight: 2 }
 
                                         PanelButton {
@@ -10038,6 +10503,99 @@ ApplicationWindow {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: generalLogPopup
+        parent: Overlay.overlay
+        modal: false
+        focus: true
+        width: Math.min(980, window.width - 40)
+        height: Math.min(540, window.height - 100)
+        x: 20
+        y: 74
+        closePolicy: Popup.CloseOnEscape
+        background: Rectangle {
+            radius: 4
+            color: "#1e2225"
+            border.color: "#72ceff"
+            border.width: 2
+        }
+        contentItem: ColumnLayout {
+            spacing: 6
+            RowLayout {
+                Layout.fillWidth: true
+                PopupDragTitle {
+                    popupTarget: generalLogPopup
+                    title: "REGISTRO GENERAL"
+                    textColor: "#e3f6ff"
+                    pixelSize: 12
+                }
+                Item { Layout.fillWidth: true }
+                Repeater {
+                    model: ["TODOS", "ICOM", "QUANSHENG", "TONOS", "REGISTROS", "EEPROM"]
+                    PanelButton {
+                        required property string modelData
+                        Layout.preferredWidth:
+                            modelData === "QUANSHENG"
+                            ? 92
+                            : modelData === "REGISTROS"
+                              ? 84
+                              : modelData === "TODOS"
+                                ? 64
+                                : 70
+                        text: modelData
+                        selected: generalLogFilter === modelData
+                        onClicked: generalLogFilter = modelData
+                    }
+                }
+                PanelButton {
+                    Layout.preferredWidth: 68
+                    text: "Copiar"
+                    tip: "Copia el registro visible al portapapeles."
+                    onClicked: radioController.copyTextToClipboard(visibleGeneralLog(), "Registro general")
+                }
+                PanelButton {
+                    Layout.preferredWidth: 68
+                    text: "Borrar"
+                    tip: "Borra el registro general."
+                    onClicked: generalLogText = ""
+                }
+                PanelButton {
+                    Layout.preferredWidth: 68
+                    text: "Cerrar"
+                    onClicked: generalLogPopup.close()
+                }
+            }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                TextArea {
+                    id: generalLogArea
+                    width: Math.max(parent.availableWidth, implicitWidth)
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextEdit.NoWrap
+                    text: visibleGeneralLog()
+                    padding: 6
+                    color: "#d9f0ff"
+                    selectionColor: "#315d72"
+                    selectedTextColor: "#ffffff"
+                    font.family: "DejaVu Sans Mono"
+                    font.pixelSize: 9
+                    background: Rectangle { color: "#050707" }
+                    onTextChanged: {
+                        cursorPosition = length
+                        Qt.callLater(function() {
+                            var flick = generalLogArea.parent
+                            if (flick && flick.contentItem)
+                                flick.contentItem.contentY = Math.max(0, flick.contentItem.contentHeight - flick.height)
+                        })
                     }
                 }
             }
@@ -10157,84 +10715,70 @@ ApplicationWindow {
                 }
 
                 PanelButton {
-                    text:
-                        diagnosticsPopup.trafficPaused
-                        ? "Continuar"
-                        : "Pausa"
-                    selected:
-                        diagnosticsPopup.trafficPaused
+                    Layout.preferredWidth: 68
+                    text: "Cerrar"
+                    tip:
+                        "Cierra la ventana de diagnóstico."
+                    onClicked:
+                        diagnosticsPopup.close()
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+
+                PanelButton {
+                    Layout.preferredWidth: 92
+                    text: "Log general"
+                    tip: "Abre el registro general filtrable de la aplicación."
+                    onClicked: generalLogPopup.open()
+                }
+
+                PanelButton {
+                    Layout.preferredWidth: 78
+                    text: diagnosticsPopup.trafficPaused ? "Continuar" : "Pausa"
+                    selected: diagnosticsPopup.trafficPaused
                     activeColor: "#9a672e"
-                    tip:
-                        diagnosticsPopup.trafficPaused
-                        ? "Reanuda la actualización del historial."
-                        : "Congela las tramas visibles para poder seleccionarlas y copiarlas."
-
-                    onClicked:
-                        diagnosticsPopup.setTrafficPaused(
-                            !diagnosticsPopup.trafficPaused
-                        )
+                    tip: diagnosticsPopup.trafficPaused
+                          ? "Reanuda la actualización del historial."
+                          : "Congela las tramas visibles para poder seleccionarlas y copiarlas."
+                    onClicked: diagnosticsPopup.setTrafficPaused(!diagnosticsPopup.trafficPaused)
                 }
 
                 PanelButton {
-                    text:
-                        diagnosticsPopup.memoryTrafficOnly
-                        ? "Solo MEM: ON"
-                        : "Solo MEM"
-                    selected:
-                        diagnosticsPopup.memoryTrafficOnly
+                    Layout.preferredWidth: 82
+                    text: diagnosticsPopup.memoryTrafficOnly ? "Solo MEM: ON" : "Solo MEM"
+                    selected: diagnosticsPopup.memoryTrafficOnly
                     activeColor: "#6a4b88"
-                    tip:
-                        "Muestra únicamente las tramas CI-V 1A 00 de lectura o escritura de memorias."
-
-                    onClicked:
-                        diagnosticsPopup.memoryTrafficOnly =
-                            !diagnosticsPopup.memoryTrafficOnly
+                    tip: "Muestra únicamente las tramas CI-V de memorias."
+                    onClicked: diagnosticsPopup.memoryTrafficOnly = !diagnosticsPopup.memoryTrafficOnly
                 }
 
                 PanelButton {
+                    Layout.preferredWidth: 76
                     text: "Copiar TX"
-                    tip:
-                        "Copia al portapapeles las tramas TX que están visibles."
-
-                    onClicked:
-                        radioController.copyTextToClipboard(
-                            diagnosticsTxArea.text,
-                            "Historial TX"
-                        )
+                    tip: "Copia las tramas TX visibles."
+                    onClicked: radioController.copyTextToClipboard(diagnosticsTxArea.text, "Historial TX")
                 }
-
                 PanelButton {
+                    Layout.preferredWidth: 76
                     text: "Copiar RX"
-                    tip:
-                        "Copia al portapapeles las tramas RX que están visibles."
-
-                    onClicked:
-                        radioController.copyTextToClipboard(
-                            diagnosticsRxArea.text,
-                            "Historial RX"
-                        )
+                    tip: "Copia las tramas RX visibles."
+                    onClicked: radioController.copyTextToClipboard(diagnosticsRxArea.text, "Historial RX")
                 }
-
                 PanelButton {
+                    Layout.preferredWidth: 84
                     text: "Copiar todo"
-                    tip:
-                        "Copia conjuntamente los historiales TX y RX visibles."
-
-                    onClicked:
-                        radioController.copyTextToClipboard(
-                            "TX:\n"
-                            + diagnosticsTxArea.text
-                            + "\n\nRX:\n"
-                            + diagnosticsRxArea.text,
-                            "Diagnóstico CI-V"
-                        )
+                    tip: "Copia conjuntamente TX y RX."
+                    onClicked: radioController.copyTextToClipboard(
+                        "TX:\n" + diagnosticsTxArea.text + "\n\nRX:\n" + diagnosticsRxArea.text,
+                        "Diagnóstico CI-V")
                 }
-
                 PanelButton {
+                    Layout.preferredWidth: 64
                     text: "Limpiar"
-                    tip:
-                        "Borra el historial TX y RX mostrado."
-
+                    tip: "Borra el historial TX y RX."
                     onClicked: {
                         diagnosticsPopup.setTrafficPaused(false)
                         diagnosticsPopup.pausedTxHistory = ""
@@ -10242,14 +10786,7 @@ ApplicationWindow {
                         radioController.clearTrafficHistory()
                     }
                 }
-
-                PanelButton {
-                    text: "Cerrar"
-                    tip:
-                        "Cierra la ventana de diagnóstico."
-                    onClicked:
-                        diagnosticsPopup.close()
-                }
+                Item { Layout.fillWidth: true }
             }
 
             Item {
@@ -10829,92 +11366,102 @@ ApplicationWindow {
                         Layout.preferredWidth: 2
                     }
 
-                    Text {
-                        Layout.maximumWidth: 70
-                        text:
-                            radioController.portName
-                        color: "#e6e6e6"
-                        font.pixelSize: 10
-                        elide: Text.ElideMiddle
-                    }
                 }
             }
 
-            TabBar {
-                id: radioTabBar
+            RowLayout {
+                id: radioPanelsHost
                 Layout.fillWidth: true
-                Layout.minimumHeight: 30
-                Layout.preferredHeight: 30
-                Layout.maximumHeight: 30
-                currentIndex: selectedRadioTab
-                onCurrentIndexChanged: selectedRadioTab = currentIndex
-
-                background: Rectangle {
-                    color: "#252a2d"
-                    border.color: "#59656b"
-                    radius: 3
-                }
-
-                TabButton {
-                    text: "ICOM IC-7300MK2"
-                    font.bold: checked
-                    contentItem: Text {
-                        text: parent.text
-                        color: parent.checked ? "#eaf7ff" : "#aeb8bd"
-                        font.bold: parent.checked
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: parent.checked ? "#315f7a" : "transparent"
-                        border.color: parent.checked ? "#72ceff" : "transparent"
-                        radius: 3
-                    }
-                }
-
-                TabButton {
-                    text: quanshengClient.connected
-                          ? (quanshengClient.observationFresh
-                             ? "QUANSHENG UV-K5  ●"
-                             : "QUANSHENG UV-K5  ◐")
-                          : "QUANSHENG UV-K5"
-                    font.bold: checked
-                    contentItem: Text {
-                        text: parent.text
-                        color: parent.checked
-                               ? "#effff3"
-                               : (quanshengClient.connected ? "#8fdb9b" : "#aeb8bd")
-                        font.bold: parent.checked
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: parent.checked ? "#356b45" : "transparent"
-                        border.color: parent.checked ? "#8fdb9b" : "transparent"
-                        radius: 3
-                    }
-                }
+                Layout.fillHeight: true
+                spacing: 8
             }
 
             Item {
                 id: radioPageHost
-                visible: selectedRadioTab === 1
+                parent: radioPanelsHost
+                visible: applicationLauncher.quanshengPanelVisible
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.preferredWidth: 550
+                Layout.minimumWidth: 520
+                Layout.maximumWidth: 590
+            }
+
+            Item {
+                id: icomPageHost
+                parent: radioPanelsHost
+                visible: applicationLauncher.icomPanelVisible
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.preferredWidth: 900
+                Layout.minimumWidth: 760
+                Layout.maximumWidth: 980
+
+                RowLayout {
+                    id: icomBandRow
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 28
+                    spacing: 3
+
+                    Repeater {
+                        model: bandDefinitions
+                        PanelButton {
+                            id: compactIcomBandButton
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            implicitHeight: 26
+                            text: modelData.name
+                            textPixelSize: 10
+                            tip: bandButtonHelp(index) + " · " + modelData.label
+                            selected: currentBandName === modelData.name
+                            activeColor: "#4a4a4a"
+                            enabled: controlsEnabled()
+                            contentItem: RowLayout {
+                                spacing: 2
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.name
+                                    color: compactIcomBandButton.enabled ? "#f1f1f1" : "#818181"
+                                    font.pixelSize: 10
+                                    font.bold: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    Layout.preferredWidth: 34
+                                    text: modelData.label
+                                    color: !compactIcomBandButton.enabled ? "#6f777b"
+                                          : compactIcomBandButton.selected ? "#ffd27a" : "#69d6ff"
+                                    font.pixelSize: 8
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
+                            }
+                            onClicked: selectBand(index)
+                        }
+                    }
+                }
             }
 
             RowLayout {
-                visible: selectedRadioTab === 0
-                Layout.fillWidth: true
-                Layout.fillHeight: true
+                parent: icomPageHost
+                visible: applicationLauncher.icomPanelVisible
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: icomBandRow.bottom
+                anchors.bottom: parent.bottom
                 spacing: 6
 
                 FrameBox {
                     id: leftOperatingPanel
 
-                    Layout.preferredWidth: 118
-                    Layout.minimumWidth: 118
-                    Layout.maximumWidth: 118
+                    Layout.preferredWidth: 106
+                    Layout.minimumWidth: 106
+                    Layout.maximumWidth: 106
                     Layout.fillHeight: true
                     color: "#2c2c2c"
 
@@ -12704,7 +13251,7 @@ text: "IP+"
                                             id: noiseLevelsPanel
 
                                             Layout.fillWidth: true
-                                            Layout.minimumWidth: 190
+                                            Layout.minimumWidth: 160
                                             Layout.fillHeight: true
                                             color: "#191c1e"
 
@@ -12952,7 +13499,9 @@ text: "IP+"
                         FrameBox {
                             id: horizontalRxPanel
 
-                            Layout.fillWidth: true
+                            Layout.preferredWidth: 780
+                            Layout.minimumWidth: 760
+                            Layout.maximumWidth: 800
                             Layout.minimumHeight: 138
                             Layout.preferredHeight: 138
                             Layout.maximumHeight: 138
@@ -13051,9 +13600,9 @@ text: "IP+"
                                 }
 
                                 FrameBox {
-                                    Layout.preferredWidth: 274
-                                    Layout.minimumWidth: 274
-                                    Layout.maximumWidth: 274
+                                    Layout.preferredWidth: 240
+                                    Layout.minimumWidth: 240
+                                    Layout.maximumWidth: 240
                                     Layout.fillHeight: true
                                     color: "#191c1e"
 
@@ -13063,8 +13612,10 @@ text: "IP+"
                                         spacing: 4
 
                                         TwinPbtControl {
-                                            Layout.fillWidth: true
-                                            Layout.minimumWidth: 204
+                                            Layout.fillWidth: false
+                                            Layout.minimumWidth: 170
+                                            Layout.preferredWidth: 170
+                                            Layout.maximumWidth: 170
                                             Layout.fillHeight: true
                                             compact: true
                                         }
@@ -13102,8 +13653,9 @@ text: "IP+"
                                 }
 
                                 FrameBox {
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: 226
+                                    Layout.preferredWidth: 176
+                                    Layout.minimumWidth: 176
+                                    Layout.maximumWidth: 176
                                     Layout.fillHeight: true
                                     color: "#191c1e"
 
@@ -13128,9 +13680,9 @@ text: "IP+"
                                             spacing: 5
 
                                             KnobControl {
-                                                Layout.minimumWidth: 82
-                                                Layout.preferredWidth: 92
-                                                Layout.maximumWidth: 92
+                                                Layout.minimumWidth: 80
+                                                Layout.preferredWidth: 80
+                                                Layout.maximumWidth: 80
                                                 Layout.fillHeight: true
                                                 compact: true
                                                 caption: "POS"
@@ -13148,7 +13700,9 @@ text: "IP+"
                                             }
 
                                             ColumnLayout {
-                                                Layout.fillWidth: true
+                                                Layout.preferredWidth: 80
+                                                Layout.minimumWidth: 80
+                                                Layout.maximumWidth: 80
                                                 Layout.fillHeight: true
                                                 spacing: 4
 
@@ -13260,13 +13814,60 @@ text: "IP+"
                                                     }
                                                 }
                                             }
+
                                         }
                                     }
                                 }
+                                FrameBox {
+                                    Layout.preferredWidth: 170
+                                    Layout.minimumWidth: 160
+                                    Layout.maximumWidth: 180
+                                    Layout.fillHeight: true
+                                    color: "#191c1e"
 
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 3
+                                        spacing: 2
 
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: "AUDIO / SQL"
+                                            color: "#ededed"
+                                            font.pixelSize: 9
+                                            font.bold: true
+                                            horizontalAlignment: Text.AlignHCenter
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Layout.fillHeight: true
+                                            spacing: 3
 
-
+                                            KnobControl {
+                                                Layout.fillWidth: true
+                                                Layout.fillHeight: true
+                                                compact: true
+                                                caption: "AF"
+                                                currentValue: radioController.afGain
+                                                accentColor: "#69d0ff"
+                                                applyFunction: function(value) {
+                                                    radioController.setAfGain(value)
+                                                }
+                                            }
+                                            KnobControl {
+                                                Layout.fillWidth: true
+                                                Layout.fillHeight: true
+                                                compact: true
+                                                caption: "SQL"
+                                                currentValue: radioController.squelch
+                                                accentColor: "#80d8c8"
+                                                applyFunction: function(value) {
+                                                    radioController.setSquelch(value)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -13276,6 +13877,7 @@ text: "IP+"
                         FrameBox {
                             id: bandAudioPanel
 
+                            visible: false
                             Layout.preferredWidth: 118
                             Layout.minimumWidth: 118
                             Layout.maximumWidth: 118
@@ -13437,6 +14039,22 @@ text: "IP+"
                             : "#ef9a9a"
                         font.pixelSize: 9
                         font.bold: true
+                    }
+
+                    Text {
+                        text: "Icom: " + (radioController.portName || "—")
+                        color: "#c5cdd1"
+                        font.pixelSize: 9
+                        elide: Text.ElideMiddle
+                        Layout.maximumWidth: 155
+                    }
+
+                    Text {
+                        text: "Quansheng: " + quanshengClient.host + ":" + quanshengClient.port
+                        color: quanshengClient.connected ? "#8fd49b" : "#c5cdd1"
+                        font.pixelSize: 9
+                        elide: Text.ElideMiddle
+                        Layout.maximumWidth: 190
                     }
 
                     Rectangle {

@@ -48,10 +48,41 @@ int main(int argc, char** argv) {
     require(read()["message"] == "hello");
     client.pressPtt(); // Not available before authentication.
     require(!client.pttPressed());
-    send({{"message", "welcome"}, {"txControlAvailable", true}, {"source", "serial"}});
+    require(!client.toneControlAvailable());
+    send({{"message", "welcome"}, {"txControlAvailable", true}, {"source", "serial"},
+          {"toneControlAvailable", true}});
     require(read()["message"] == "subscribe");
     send({{"message", "source_status"}, {"status", "listening"}});
     waitFor([&] { return client.sourceStatus() == "listening"; });
+    require(client.toneOptions(1).size() == 50 && client.toneOptions(3).size() == 104);
+    require(client.toneOptions(3).last().toString() == "D754I");
+    client.setTone("A", "RX", 1, 50);
+    require(!client.controlBusy());
+    client.readTones("A");
+    require(client.controlBusy() && client.toneState().isEmpty());
+    require(read()["message"] == "read_tones");
+    client.pressPtt();
+    require(!client.pttPressed());
+    send({{"message", "tone_status"}, {"status", "rejected"}, {"error", "radio_state_stale"}});
+    waitFor([&] { return !client.controlBusy(); });
+    client.setTone("A", "TX", 3, 103);
+    const auto toneRequest = read();
+    require(toneRequest["message"] == "set_tone" && toneRequest["direction"] == "TX"
+            && toneRequest["type"] == 3 && toneRequest["index"] == 103);
+    send({{"message", "tone_status"}, {"status", "starting"}});
+    waitFor([&] { return client.toneStatus().contains("menús"); });
+    // Another client's failed operation must not release our tone busy flag.
+    send({{"message", "vfo_status"}, {"status", "error"}});
+    send({{"message", "tone_state"}, {"vfo", "A"}, {"frequency", "145.67500"}, {"memory", "F6"},
+          {"rx", QJsonObject{{"type", 0}, {"index", 0}, {"text", "OFF"}}},
+          {"tx", QJsonObject{{"type", 3}, {"index", 103}, {"text", "D754I"}}}});
+    waitFor([&] { return !client.toneState().isEmpty(); });
+    require(client.controlBusy());
+    send({{"message", "tone_status"}, {"status", "complete"}});
+    waitFor([&] { return !client.controlBusy(); });
+    require(client.toneState()["tx"].toMap()["index"].toInt() == 103);
+    send({{"message", "display_state"}, {"activeVfo", "B"}});
+    waitFor([&] { return client.toneState().isEmpty(); });
     client.pressPtt();
     require(client.pttPressed());
     const auto first = read();
@@ -86,6 +117,7 @@ int main(int argc, char** argv) {
     peer->disconnectFromHost();
     waitFor([&] { return !client.connected(); });
     require(!client.pttPressed() && !client.txControlAvailable());
+    require(!client.toneControlAvailable() && client.toneState().isEmpty());
     client.pressPtt();
     require(!client.pttPressed());
     return EXIT_SUCCESS;

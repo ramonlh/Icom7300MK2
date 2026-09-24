@@ -277,3 +277,31 @@ pulsar y se desactiva rápidamente al soltar. No hay medición de latencia ni
 confirmación física de los casos de caducidad/desconexión.
 Una interrupción USB, SIGKILL
 o pérdida de alimentación impide garantizar que la radio reciba la liberación.
+## Tonos CTCSS/DCS (extensión compatible, 19 de septiembre de 2026)
+
+`welcome.toneControlAvailable` anuncia el control de tonos. Ausente/false en
+servidores anteriores y replay. Requiere autenticación, subscribe y permiso
+`--allow-frequency-control`, también para leer porque navega menús.
+
+Peticiones: `{"message":"read_tones","vfo":"A"}` y
+`{"message":"set_tone","vfo":"A","direction":"RX","type":1,"index":8}`.
+VFO A/B debe estar seleccionado y observado; dirección RX/TX. Tipos: 0 OFF
+(índice 0), 1 CTCSS (0–49), 2 DCS normal y 3 invertido (0–103). Números enteros
+JSON estrictos; no se aceptan códigos arbitrarios ni cadenas como índices.
+
+`tone_status` publica starting, complete o error para todos los suscriptores.
+`rejected` se envía solo al solicitante cuando no se puede iniciar y no termina
+una operación en curso. `complete` requiere releer y comprobar el menú tras
+escribir. Antes de complete se publica `tone_state`: vfo, frequency, memory,
+observedAt, rx/tx con type, index y text. Es una instantánea de pantalla, no
+confirmación RF ni de persistencia en memoria, y no representa un paquete
+espontáneo de configuración enviado por la radio. Al entrar en modo memoria y
+tras cambiar de canal, el cliente solicita automáticamente una nueva lectura;
+en VFO se mantiene la lectura explícita. Una nueva lectura la actualiza.
+
+La operación comparte exclusión con frecuencia, VFO, EEPROM y PTT. Se cancela
+cuando se desconecta el solicitante, se pierde la fuente o el estado RX/TX,
+aparece TX, cambia el VFO observado o falla la verificación. No hay reintentos
+automáticos de escritura. Un error puede dejar un ajuste ya aceptado: releer.
+La radio vuelve al menú principal con EXIT al finalizar, salvo TX o cierre de
+puerto. Protocolo y límites físicos: [PROTOCOL.md](PROTOCOL.md).

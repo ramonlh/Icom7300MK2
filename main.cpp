@@ -57,7 +57,7 @@ int main(int argc, char *argv[])
         QStringLiteral("1.2.12")
     );
     QGuiApplication::setApplicationDisplayName(
-        QStringLiteral("IC-7300MK2 Control")
+        QStringLiteral("IC-7300MK2 / Quansheng UV-K5 Control")
     );
 
     // Linux/Wayland y varios escritorios modernos relacionan la ventana

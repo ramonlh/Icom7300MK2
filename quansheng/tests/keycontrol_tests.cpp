@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "experimental/keycontrol.h"
+#include "core/tones.h"
 #include <cassert>
 #include <stdexcept>
 
 int main() {
+    assert(qdock::toneLabel(1, 0) == "67.0 Hz");
+    assert(qdock::toneLabel(1, 8) == "88.5 Hz");
+    assert(qdock::toneLabel(1, 49) == "254.1 Hz");
+    assert(qdock::toneLabel(2, 0) == "D023N");
+    assert(qdock::toneLabel(3, 103) == "D754I");
+    assert(qdock::toneLabel(0, 0) == "OFF");
+    assert(!qdock::validTone(1, -1) && !qdock::validTone(1, 50));
+    assert(!qdock::validTone(2, 104) && !qdock::validTone(3, 104));
+    assert(!qdock::validTone(0, 1) && !qdock::validTone(4, 0));
     const auto frames = qdock::experimental::makeFrequencyEntryFrames(145675000);
     assert(frames.size() == 6);
     const std::uint8_t expectedDigits[] = {1, 4, 5, 6, 7, 5};

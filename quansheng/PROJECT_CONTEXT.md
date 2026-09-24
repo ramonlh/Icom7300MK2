@@ -8,6 +8,43 @@ IC-7300MK2, denominación proporcionada por el usuario.
 Este documento permite retomar el trabajo sin acceder a la conversación original.
 No confundir el port nativo con QuanshengDock Windows bajo Wine.
 
+## CTCSS/DCS — 19 de septiembre de 2026
+
+Ampliación solicitada explícitamente por el usuario: lectura, gestión y escritura
+de tonos del Quansheng. Editor RX/TX separado, OFF, 50 CTCSS, 104 DCS N y 104 DCS I.
+Se reutiliza el permiso de teclado `--allow-frequency-control`, anunciando además
+`toneControlAvailable` para distinguir servidores anteriores. La lectura navega
+menús y requiere permiso de control, aunque no acepta cambios de ajustes.
+
+Referencia inspeccionada de solo lectura:
+`reference/QuanshengDock-Linux/reference/quansheng-dock-fw/`, `dcs.c`,
+`app/menu.c`, `ui/menu.c`, `ui/helper.c`, `settings.c`, firmware Dock 0.32.21q.
+El control usa menús 03–06 y KeyPress 0x0801. La escritura se verifica mediante
+una nueva lectura del menú; no se confunde envío con confirmación. OFF necesita
+desactivar CTCSS y DCS por separado. No existe WriteEeprom ni escritura de
+registros en esta ampliación. El propio firmware guarda los ajustes aceptados
+en VFO; en MR son cambios del canal en uso, sin reescribir la memoria guardada.
+Esta petición autoriza esos ajustes de tonos, no flasheo ni pruebas físicas.
+
+Pruebas offline: emulador de menús sobre un PTY nuevo, CRC independiente,
+lectura sin aceptación, cambio de familia, extremos, OFF, validación de entradas,
+exclusión de otros controles, timeout, discrepancia y cancelación por desconexión.
+**PENDIENTE:** validación física del recorrido de menús, tiempos, lectura y
+persistencia en el UV-K5 del Pavilion. Se deben actualizar servidor y cliente.
+El estado leído es una instantánea confirmada por los menús de la radio, no una
+notificación espontánea de CTCSS/DCS. El cliente la solicita automáticamente al
+entrar en modo memoria y después de cada cambio de canal de memoria; en VFO se
+mantiene la lectura explícita. La navegación debe devolver la radio a la pantalla
+operativa y conservar su VFO, modo y canal.
+
+**CONFIRMADO offline en esta sesión:** compilan aplicación principal y servidor;
+12/12 suites Quansheng (incluida `lan-tones`, A/B y rechazo sin permiso) y 2/2
+suites de aplicación aprobadas. Carga QML offscreen con configuración temporal
+vacía correcta, sin autoconexiones ni acceso a radio; solo avisos de PulseAudio
+del entorno aislado. Las pruebas TCP usan localhost fuera del sandbox. La prueba
+inicial detectó que borrar el display al entrar en menú vacía el selector VFO:
+se corrigió para cancelar solo ante otro VFO observado, no ante selector vacío.
+
 ## PTT experimental autorizado — 17 de septiembre de 2026
 
 El usuario solicita expresamente implementar PTT. Esta actualización prevalece

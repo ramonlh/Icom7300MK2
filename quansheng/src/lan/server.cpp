@@ -61,8 +61,10 @@ public:
 private:
     void releasePtt() {
 #ifdef QDOCK_SERIAL
-        if (auto* serial = qobject_cast<SerialSource*>(source_))
+        if (auto* serial = qobject_cast<SerialSource*>(source_)) {
             serial->releasePtt(this, "client_disconnected");
+            serial->cancelTones(this);
+        }
 #endif
     }
     bool send(QJsonObject object) {
@@ -140,6 +142,7 @@ private:
                   {"txControlAvailable", txControlAvailable}, {"radioControlAvailable", false},
                   {"eepromReadAvailable", eepromReadAvailable},
                   {"frequencyControlAvailable", frequencyControlAvailable},
+                  {"toneControlAvailable", frequencyControlAvailable},
                   {"normalizedStateAvailable", false}});
         } else if (message == "ping") {
             send({{"message", "pong"}});
@@ -250,6 +253,24 @@ private:
             if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
 #else
             send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "read_tones" || message == "set_tone") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            QString error;
+            const bool write = message == "set_tone";
+            const auto type = object.value("type"), index = object.value("index");
+            if (!started_ || !serial) error = "tone_control_unavailable";
+            else if (write && (!type.isDouble() || !index.isDouble()
+                || type.toDouble() != type.toInt(-1) || index.toDouble() != index.toInt(-1)
+                || (object.value("direction") != "RX" && object.value("direction") != "TX")))
+                error = "tone_value_invalid";
+            else error = serial->requestTones(this, object.value("vfo").toString(),
+                write ? object.value("direction").toString() : QString(),
+                type.toInt(-1), index.toInt(-1));
+            if (!error.isEmpty()) send({{"message", "tone_status"}, {"status", "rejected"}, {"error", error}});
+#else
+            send({{"message", "tone_status"}, {"status", "rejected"}, {"error", "tone_control_unavailable"}});
 #endif
         } else if (message == "set_squelch") {
 #ifdef QDOCK_SERIAL
