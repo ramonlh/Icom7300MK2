@@ -1,4 +1,12 @@
-CONTROL IC-7300MK2 - VERSIÓN 1.2.12
+CONTROL IC-7300MK2 - VERSIÓN 1.2.13
+
+
+CAMBIOS 1.2.13 - CONTROLES QUANSHENG Y ACCESOS RAPIDOS
+- Panel Icom y panel Quansheng visibles simultaneamente.
+- Accesos directos VHF 144-146 MHz y UHF 430-440 MHz para el UV-K5.
+- Memoria de frecuencia y perfil observado por banda/VFO Quansheng.
+- Editor de tonos CTCSS/DCS RX/TX mediante control de menus.
+- Botones Quansheng inhibidos hasta recibir nueva pantalla tras cada orden.
 
 
 CAMBIOS 1.2.12 - INTERFAZ AGRUPADA Y S-METER ANALÓGICO

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(Icom7300Mk2Control
-    VERSION 1.2.12
+    VERSION 1.2.13
     LANGUAGES CXX
 )
 

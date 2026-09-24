@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
         QStringLiteral("Icom7300Mk2Control")
     );
     QGuiApplication::setApplicationVersion(
-        QStringLiteral("1.2.12")
+        QStringLiteral("1.2.13")
     );
     QGuiApplication::setApplicationDisplayName(
         QStringLiteral("IC-7300MK2 / Quansheng UV-K5 Control")

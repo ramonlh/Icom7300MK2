@@ -5,7 +5,7 @@
 ![Platform](https://img.shields.io/badge/platform-Linux-1793D1)
 ![Qt](https://img.shields.io/badge/Qt-6.4%2B-41CD52)
 ![C++](https://img.shields.io/badge/C%2B%2B-20-00599C)
-![Version](https://img.shields.io/badge/version-1.2.12-blue)
+![Version](https://img.shields.io/badge/version-1.2.13-blue)
 ![Status](https://img.shields.io/badge/status-in%20development-orange)
 
 Desktop application for **Linux** designed to control the **Icom IC-7300MK2** transceiver via **CI-V**, developed with **C++20, Qt 6 and QML**.
@@ -16,6 +16,14 @@ The goal of the project is to provide a single, compact and readable control pan
 > This project is developed specifically around the **IC-7300MK2**. At present, it is not intended to be a generic CI-V controller for all Icom models.
 
 ---
+
+### v1.2.13 — Quansheng dual-radio controls and band shortcuts
+
+- The main window can show the Icom panel and Quansheng LAN panel side by side.
+- Quansheng direct band buttons now include VHF 144-146 MHz and UHF 430-440 MHz shortcuts.
+- Quansheng bands remember the last frequency and observed profile per VFO, including mode, power, step and tones.
+- CTCSS/DCS read/write support is exposed through the Quansheng tone editor when the server enables keyboard control.
+- Quansheng controls remain inhibited until a fresh display state arrives after a command, with a timeout fallback.
 
 ### v1.2.12 — Grouped interface and analog S-Meter
 
@@ -54,7 +62,7 @@ The access key for the web panel can be set manually from the **INTERNET** windo
 
 ## Project status
 
-Current version: **1.2.12**
+Current version: **1.2.13**
 
 The application is under active development. The main CI-V control, VFO, level, memory, spectrum/waterfall and Morse trainer functions are implemented and continue to be refined.
 
@@ -909,8 +917,8 @@ For published versions, **GitHub Releases** are recommended instead of storing a
 Example:
 
 ```text
-v1.2.12
-└── Icom7300Mk2Control_v1.2.12.zip
+v1.2.13
+└── Icom7300Mk2Control_v1.2.13.zip
 ```
 
 The main repository should contain the source code for the current version.

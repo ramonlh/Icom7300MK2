@@ -19,7 +19,7 @@ ApplicationWindow {
     maximumHeight: 880
 
     visible: true
-    title: "Control IC-7300MK2 / Quansheng UV-K5 · Versión 1.2.12 · Compilado " + buildTimestamp
+    title: "Control IC-7300MK2 / Quansheng UV-K5 · Versión 1.2.13 · Compilado " + buildTimestamp
     color: "#454545"
 
     property bool diagnosticsVisible: false

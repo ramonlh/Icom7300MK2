@@ -5,7 +5,7 @@ No se ha comprobado su instalación en otras distribuciones o versiones.
 
 ## Elegir el paquete
 
-- **HP principal:** `icom7300mk2-control_1.2.12-1_amd64.deb`.
+- **HP principal:** `icom7300mk2-control_1.2.13-1_amd64.deb`.
   Incluye la aplicación Icom, el cliente LAN Quansheng y el acceso al menú.
 - **Pavilion:** `qdock-server_0.1.0-1_amd64.deb`.
   Incluye `qdock-server`, su interfaz gráfica y `qdock-probe`.
@@ -23,7 +23,7 @@ o ejecutar en el directorio de descarga:
 
 ```bash
 # En el HP principal:
-sudo apt install ./icom7300mk2-control_1.2.12-1_amd64.deb
+sudo apt install ./icom7300mk2-control_1.2.13-1_amd64.deb
 
 # En el Pavilion:
 sudo apt install ./qdock-server_0.1.0-1_amd64.deb
@@ -70,7 +70,7 @@ del servidor. Para PTT, marcar **Permitir PTT** antes de iniciar el servidor.
 Junto a cada paquete hay un archivo `.sha256`:
 
 ```bash
-sha256sum -c icom7300mk2-control_1.2.12-1_amd64.deb.sha256
+sha256sum -c icom7300mk2-control_1.2.13-1_amd64.deb.sha256
 sha256sum -c qdock-server_0.1.0-1_amd64.deb.sha256
 ```
 

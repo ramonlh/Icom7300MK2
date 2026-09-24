@@ -5,7 +5,7 @@
 ![Platform](https://img.shields.io/badge/platform-Linux-1793D1)
 ![Qt](https://img.shields.io/badge/Qt-6.4%2B-41CD52)
 ![C++](https://img.shields.io/badge/C%2B%2B-20-00599C)
-![Version](https://img.shields.io/badge/version-1.2.12-blue)
+![Version](https://img.shields.io/badge/version-1.2.13-blue)
 ![Status](https://img.shields.io/badge/status-en%20desarrollo-orange)
 
 Aplicación de escritorio para **Linux** destinada al control del transceptor **Icom IC-7300MK2** mediante **CI-V**, desarrollada en **C++20, Qt 6 y QML**.
@@ -16,6 +16,14 @@ El objetivo del proyecto es disponer de un panel único, compacto y legible desd
 > Este proyecto está desarrollado específicamente alrededor del **IC-7300MK2**. No pretende ser, por el momento, un controlador CI-V genérico para todos los modelos Icom.
 
 ---
+
+### v1.2.13 — Controles Quansheng y accesos rápidos de banda
+
+- La ventana principal puede mostrar a la vez el panel Icom y el panel LAN Quansheng.
+- Los botones directos de banda Quansheng añaden accesos VHF 144-146 MHz y UHF 430-440 MHz.
+- Las bandas Quansheng recuerdan la última frecuencia y el perfil observado por VFO, incluidos modo, potencia, paso y tonos.
+- El editor Quansheng permite leer y escribir CTCSS/DCS cuando el servidor habilita el control por teclado.
+- Los controles Quansheng quedan inhibidos hasta recibir un nuevo estado de pantalla tras una orden, con desbloqueo por timeout.
 
 ### v1.2.12 — Interfaz agrupada y S-Meter analógico
 
@@ -54,7 +62,7 @@ La clave de acceso al panel web puede fijarse manualmente desde la ventana **INT
 
 ## Estado del proyecto
 
-Versión actual: **1.2.12**
+Versión actual: **1.2.13**
 
 El programa se encuentra en desarrollo activo. Las funciones principales de control CI-V, VFO, niveles, memorias, spectrum/waterfall y entrenador Morse están implementadas y se siguen refinando.
 
@@ -903,8 +911,8 @@ Para versiones publicadas se recomienda utilizar **GitHub Releases** en lugar de
 Ejemplo:
 
 ```text
-v1.2.12
-└── Icom7300Mk2Control_v1.2.12.zip
+v1.2.13
+└── Icom7300Mk2Control_v1.2.13.zip
 ```
 
 El repositorio principal debería contener el código fuente de la versión actual.
