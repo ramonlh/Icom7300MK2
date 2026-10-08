@@ -5,7 +5,7 @@
 ![Platform](https://img.shields.io/badge/platform-Linux-1793D1)
 ![Qt](https://img.shields.io/badge/Qt-6.4%2B-41CD52)
 ![C++](https://img.shields.io/badge/C%2B%2B-20-00599C)
-![Version](https://img.shields.io/badge/version-1.2.13-blue)
+![Version](https://img.shields.io/badge/version-1.2.14-blue)
 ![Status](https://img.shields.io/badge/status-in%20development-orange)
 
 Desktop application for **Linux** designed to control the **Icom IC-7300MK2** transceiver via **CI-V**, developed with **C++20, Qt 6 and QML**.
@@ -16,6 +16,14 @@ The goal of the project is to provide a single, compact and readable control pan
 > This project is developed specifically around the **IC-7300MK2**. At present, it is not intended to be a generic CI-V controller for all Icom models.
 
 ---
+
+### v1.2.14 — Video, QRZ and Quansheng reliability
+
+- Adds an integrated live HDMI capture panel for the Icom, including full-screen and scope/waterfall views.
+- Adds QRZ Logbook statistics and recent QSOs to the main toolbar.
+- Improves Quansheng serial reconnect diagnostics and the remote server controls.
+- Frequency tuning by mouse wheel now handles mouse and touchpad wheel events consistently; Quansheng edits are confirmed with Validate.
+- Radio status and diagnostic text can be selected and copied.
 
 ### v1.2.13 — Quansheng dual-radio controls and band shortcuts
 
@@ -62,7 +70,7 @@ The access key for the web panel can be set manually from the **INTERNET** windo
 
 ## Project status
 
-Current version: **1.2.13**
+Current version: **1.2.14**
 
 The application is under active development. The main CI-V control, VFO, level, memory, spectrum/waterfall and Morse trainer functions are implemented and continue to be refined.
 
@@ -917,8 +925,8 @@ For published versions, **GitHub Releases** are recommended instead of storing a
 Example:
 
 ```text
-v1.2.13
-└── Icom7300Mk2Control_v1.2.13.zip
+v1.2.14
+└── Icom7300Mk2Control_v1.2.14.zip
 ```
 
 The main repository should contain the source code for the current version.

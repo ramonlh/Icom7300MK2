@@ -5,7 +5,7 @@
 ![Platform](https://img.shields.io/badge/platform-Linux-1793D1)
 ![Qt](https://img.shields.io/badge/Qt-6.4%2B-41CD52)
 ![C++](https://img.shields.io/badge/C%2B%2B-20-00599C)
-![Version](https://img.shields.io/badge/version-1.2.13-blue)
+![Version](https://img.shields.io/badge/version-1.2.14-blue)
 ![Status](https://img.shields.io/badge/status-en%20desarrollo-orange)
 
 Aplicación de escritorio para **Linux** destinada al control del transceptor **Icom IC-7300MK2** mediante **CI-V**, desarrollada en **C++20, Qt 6 y QML**.
@@ -16,6 +16,14 @@ El objetivo del proyecto es disponer de un panel único, compacto y legible desd
 > Este proyecto está desarrollado específicamente alrededor del **IC-7300MK2**. No pretende ser, por el momento, un controlador CI-V genérico para todos los modelos Icom.
 
 ---
+
+### v1.2.14 — Vídeo, QRZ y fiabilidad Quansheng
+
+- Añade captura HDMI en directo del Icom, con vistas de pantalla completa y scope/waterfall.
+- Integra estadísticas del logbook QRZ y los últimos QSOs en la barra superior.
+- Mejora el diagnóstico de reconexión serie del Quansheng y los controles del servidor remoto.
+- El ajuste de frecuencia con rueda admite de forma consistente ratón y panel táctil; en Quansheng se confirma con Validar.
+- Los textos de estado y diagnóstico se pueden seleccionar y copiar.
 
 ### v1.2.13 — Controles Quansheng y accesos rápidos de banda
 
@@ -62,7 +70,7 @@ La clave de acceso al panel web puede fijarse manualmente desde la ventana **INT
 
 ## Estado del proyecto
 
-Versión actual: **1.2.13**
+Versión actual: **1.2.14**
 
 El programa se encuentra en desarrollo activo. Las funciones principales de control CI-V, VFO, niveles, memorias, spectrum/waterfall y entrenador Morse están implementadas y se siguen refinando.
 
@@ -911,8 +919,8 @@ Para versiones publicadas se recomienda utilizar **GitHub Releases** en lugar de
 Ejemplo:
 
 ```text
-v1.2.13
-└── Icom7300Mk2Control_v1.2.13.zip
+v1.2.14
+└── Icom7300Mk2Control_v1.2.14.zip
 ```
 
 El repositorio principal debería contener el código fuente de la versión actual.

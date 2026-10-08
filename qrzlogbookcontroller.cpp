@@ -264,7 +264,7 @@ void QrzLogbookController::sendRequest(const Fields &fields,
     QNetworkRequest request(QUrl(QStringLiteral("https://logbook.qrz.com/api")));
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
-    request.setRawHeader("User-Agent", "Icom7300Mk2Control/1.2.13");
+    request.setRawHeader("User-Agent", "Icom7300Mk2Control/1.2.14");
     request.setTransferTimeout(20000);
     const quint64 generation = m_requestGeneration;
     QNetworkReply *reply = m_network.post(

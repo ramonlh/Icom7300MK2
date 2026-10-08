@@ -1,4 +1,12 @@
-CONTROL IC-7300MK2 - VERSIÓN 1.2.13
+CONTROL IC-7300MK2 - VERSIÓN 1.2.14
+
+
+CAMBIOS 1.2.14 - VIDEO, QRZ Y FIABILIDAD QUANSHENG
+- Captura HDMI en directo del Icom, con vista completa o scope/waterfall.
+- Estadísticas QRZ Logbook y últimos QSOs en la barra superior.
+- Mejoras de diagnóstico y recuperación del puerto serie Quansheng.
+- Ajuste con rueda para ratón y panel táctil; Quansheng requiere Validar.
+- Textos de estado seleccionables y copiables.
 
 
 CAMBIOS 1.2.13 - CONTROLES QUANSHENG Y ACCESOS RAPIDOS
