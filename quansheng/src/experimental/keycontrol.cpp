@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 
 namespace qdock::experimental {
 namespace {
@@ -76,11 +77,12 @@ std::vector<std::vector<std::uint8_t>> makeModeChangeFrames(std::uint8_t mode, b
     return frames;
 }
 
-namespace {
 std::vector<std::vector<std::uint8_t>> makeMenuSettingFrames(
-    std::uint8_t menuNumber, std::uint8_t value)
+    std::uint8_t menuNumber, std::uint32_t value)
 {
-    if (menuNumber < 10 || menuNumber > 99 || value > 9)
+    if (menuNumber > 99 || (menuNumber == 8
+            ? (value > 99999900U || value % 100U != 0)
+            : value > 999U))
         throw std::invalid_argument("ajuste de menú Quansheng fuera de rango");
     std::vector<std::vector<std::uint8_t>> frames;
     const auto click = [&](std::uint8_t keyValue) {
@@ -88,14 +90,18 @@ std::vector<std::vector<std::uint8_t>> makeMenuSettingFrames(
         frames.push_back(makeKeyPressFrame(19));
     };
     click(10); // MENU
-    click(menuNumber / 10);
+    if (menuNumber >= 10)
+        click(menuNumber / 10);
     click(menuNumber % 10);
     click(10); // entrar en el ajuste
-    click(value);
+    std::string digits = std::to_string(menuNumber == 8 ? value / 100U : value);
+    if (menuNumber == 8)
+        digits.insert(0, 6 - digits.size(), '0');
+    for (const char digit : digits)
+        click(static_cast<std::uint8_t>(digit - '0'));
     click(10); // aceptar
     click(13); // salir del menú
     return frames;
-}
 }
 
 std::vector<std::vector<std::uint8_t>> makeDualWatchFrames(bool enabled) {
@@ -107,6 +113,12 @@ std::vector<std::vector<std::uint8_t>> makeSquelchFrames(std::uint8_t level) {
     if (level > 9) throw std::invalid_argument("nivel de squelch fuera de 0-9");
     // Firmware Dock 0.32.21q: menú 61 "Sql".
     return makeMenuSettingFrames(61, level);
+}
+
+std::vector<std::vector<std::uint8_t>> makeVoxFrames(std::uint8_t level) {
+    if (level > 9) throw std::invalid_argument("nivel VOX fuera de 0-9");
+    // Firmware Dock 0.32.21q: menú 57 "VOX"; 0=OFF, 1..9=nivel por teclado.
+    return makeMenuSettingFrames(57, level);
 }
 
 std::vector<std::vector<std::uint8_t>> makeFrequencyEntryFrames(std::uint32_t frequencyHz) {
@@ -123,6 +135,49 @@ std::vector<std::vector<std::uint8_t>> makeFrequencyEntryFrames(std::uint32_t fr
     frames.reserve(text.size());
     for (const char digit : text)
         frames.push_back(makeKeyPressFrame(static_cast<std::uint8_t>(digit - '0')));
+    return frames;
+}
+
+std::vector<std::vector<std::uint8_t>> makeFrequencyChangeFrames(
+    std::uint32_t frequencyHz, bool configureTenHzStep) {
+    if (frequencyHz < 18000000 || frequencyHz > 1300000000
+            || (frequencyHz > 630000000 && frequencyHz < 840000000))
+        throw std::invalid_argument("frecuencia no utilizable (18-1300 MHz; 630-840 MHz excluidos)");
+    const auto target = ((frequencyHz + 5u) / 10u) * 10u;
+    const auto khz = ((target + 500u) / 1000u) * 1000u;
+    if (khz < 18000000u || khz > 1300000000u
+            || (khz > 630000000u && khz < 840000000u))
+        throw std::invalid_argument("frecuencia base fuera de banda utilizable");
+
+    std::vector<std::vector<std::uint8_t>> frames;
+    const auto click = [&frames](std::uint8_t keyValue) {
+        frames.push_back(makeKeyPressFrame(keyValue));
+        frames.push_back(makeKeyPressFrame(19));
+    };
+    if (configureTenHzStep) {
+        const auto step = makeMenuSettingFrames(1, 0);
+        frames.insert(frames.end(), step.begin(), step.end());
+    }
+    for (const auto& digit : makeFrequencyEntryFrames(khz)) {
+        frames.push_back(digit);
+        frames.push_back(makeKeyPressFrame(19));
+    }
+    const auto delta = static_cast<std::int64_t>(target) - static_cast<std::int64_t>(khz);
+    const auto keyValue = delta >= 0 ? std::uint8_t(11) : std::uint8_t(12);
+    const auto steps = (delta < 0 ? -delta : delta) / 10;
+    for (std::int64_t count = 0; count < steps; ++count)
+        click(keyValue);
+    return frames;
+}
+
+std::vector<std::vector<std::uint8_t>> makeFrequencyStepFrames(bool up, bool configureTenHzStep) {
+    std::vector<std::vector<std::uint8_t>> frames;
+    if (configureTenHzStep) {
+        const auto step = makeMenuSettingFrames(1, 0);
+        frames.insert(frames.end(), step.begin(), step.end());
+    }
+    frames.push_back(makeKeyPressFrame(up ? 11 : 12));
+    frames.push_back(makeKeyPressFrame(19));
     return frames;
 }
 }

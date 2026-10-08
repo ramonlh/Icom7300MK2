@@ -3,6 +3,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -15,13 +16,77 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QPushButton>
+#include <QRegularExpression>
+#include <QSettings>
 #include <QSerialPortInfo>
 #include <QSpinBox>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
 namespace {
+constexpr int restartExitCode = 75;
+constexpr qint64 diagnosticLogLimit = 5 * 1024 * 1024;
+
+QString diagnosticLogPath()
+{
+    return QDir::home().filePath(QStringLiteral(".local/state/qdock/serial-diagnostics.log"));
+}
+
+void appendDiagnostic(const QByteArray &source, const QByteArray &data)
+{
+    if (data.isEmpty())
+        return;
+
+    const QString path = diagnosticLogPath();
+    const QFileInfo info(path);
+    QDir().mkpath(info.absolutePath());
+    if (info.exists() && info.size() + data.size() + 64 > diagnosticLogLimit) {
+        QFile::remove(path + QStringLiteral(".1"));
+        QFile::rename(path, path + QStringLiteral(".1"));
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append))
+        return;
+    file.write(QDateTime::currentDateTime().toString(Qt::ISODateWithMs).toUtf8());
+    file.write(" [");
+    file.write(source);
+    file.write("] ");
+    file.write(data);
+    if (!data.endsWith('\n'))
+        file.write("\n");
+}
+
+QString portLabel(const QSerialPortInfo &info)
+{
+    QString label = info.systemLocation();
+    QStringList details;
+    if (!info.description().isEmpty())
+        details << info.description();
+    if (!info.manufacturer().isEmpty())
+        details << info.manufacturer();
+    if (info.hasVendorIdentifier() && info.hasProductIdentifier())
+        details << QStringLiteral("VID:PID %1:%2")
+                       .arg(QString::number(info.vendorIdentifier(), 16).rightJustified(4, QLatin1Char('0')).toUpper(),
+                            QString::number(info.productIdentifier(), 16).rightJustified(4, QLatin1Char('0')).toUpper());
+    if (!details.isEmpty())
+        label += QStringLiteral("  -  ") + details.join(QStringLiteral(" · "));
+    return label;
+}
+
+QString selectedPortName(const QComboBox *port)
+{
+    const int index = port->currentIndex();
+    if (index >= 0 && port->currentText() == port->itemText(index)) {
+        const QString value = port->itemData(index).toString();
+        if (!value.isEmpty())
+            return value;
+    }
+    return port->currentText().trimmed();
+}
+
 QString tokenPath()
 {
     return QDir::homePath() + QStringLiteral("/.config/qdock/lan-token");
@@ -29,6 +94,12 @@ QString tokenPath()
 
 QByteArray readToken(QString &error)
 {
+    const QByteArray environmentToken = qgetenv("QDOCK_LAN_TOKEN").trimmed();
+    if (!environmentToken.isEmpty()) {
+        if (environmentToken.size() < 16)
+            error = QStringLiteral("QDOCK_LAN_TOKEN requiere al menos 16 caracteres.");
+        return environmentToken;
+    }
     QFile file(tokenPath());
     if (!file.open(QIODevice::ReadOnly)) {
         error = QStringLiteral("No se puede leer %1: %2").arg(tokenPath(), file.errorString());
@@ -78,6 +149,10 @@ int main(int argc, char *argv[])
     auto *listenPort = new QSpinBox;
     listenPort->setRange(1, 65535);
     listenPort->setValue(8765);
+    bool portOk = false;
+    const int environmentPort = qEnvironmentVariableIntValue("QDOCK_LAN_PORT", &portOk);
+    if (portOk && environmentPort >= 1 && environmentPort <= 65535)
+        listenPort->setValue(environmentPort);
     auto *networkRow = new QHBoxLayout;
     networkRow->addWidget(listenAddress, 1);
     networkRow->addWidget(new QLabel(QStringLiteral("Puerto:")));
@@ -95,8 +170,16 @@ int main(int argc, char *argv[])
         options->addWidget(box);
     }
     auto *ptt = new QCheckBox(QStringLiteral("Permitir PTT"));
+    ptt->setChecked(true);
     ptt->setToolTip(QStringLiteral("PTT momentáneo desde LAN; permite emitir RF. Máximo 60 s."));
     options->addWidget(ptt);
+    auto *autoStart = new QCheckBox(QStringLiteral("Iniciar al abrir"));
+    QSettings settings;
+    autoStart->setChecked(settings.value(QStringLiteral("serverGui/autoStart"), false).toBool());
+    if (qEnvironmentVariableIntValue("QDOCK_GUI_AUTOSTART") > 0)
+        autoStart->setChecked(true);
+    autoStart->setToolTip(QStringLiteral("Arranca el servidor automáticamente al abrir esta ventana."));
+    options->addWidget(autoStart);
     options->addStretch();
     root->addLayout(options);
 
@@ -104,11 +187,14 @@ int main(int argc, char *argv[])
     auto *start = new QPushButton(QStringLiteral("Iniciar servidor"));
     auto *stop = new QPushButton(QStringLiteral("Detener"));
     auto *clear = new QPushButton(QStringLiteral("Limpiar registro"));
+    auto *eventCounter = new QLabel(QStringLiteral("Eventos: 0 · Bytes: 0 · Descartados: 0 · Pendientes: 0"));
+    eventCounter->setStyleSheet(QStringLiteral("color:#000000;font-weight:normal"));
     stop->setEnabled(false);
     buttons->addWidget(start);
     buttons->addWidget(stop);
     buttons->addWidget(clear);
     buttons->addStretch();
+    buttons->addWidget(eventCounter);
     root->addLayout(buttons);
 
     auto *log = new QPlainTextEdit;
@@ -118,21 +204,41 @@ int main(int argc, char *argv[])
     root->addWidget(log, 1);
 
     auto *safety = new QLabel(QStringLiteral(
-        "PTT requiere marcar Permitir PTT antes de iniciar. Escritura EEPROM/registros/GPIO bloqueada."));
+        "PTT LAN habilitado para pruebas controladas. Escritura EEPROM/registros/GPIO bloqueada."));
     safety->setStyleSheet(QStringLiteral("color:#8fdb9b"));
     root->addWidget(safety);
 
+    auto *diagnosticPath = new QLabel(QStringLiteral("Registro persistente: %1").arg(diagnosticLogPath()));
+    diagnosticPath->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    diagnosticPath->setStyleSheet(QStringLiteral("color:#aab3bc"));
+    root->addWidget(diagnosticPath);
+
     QProcess server(&window);
     server.setProcessChannelMode(QProcess::MergedChannels);
+    QProcess kernelLog(&window);
+    kernelLog.setProcessChannelMode(QProcess::SeparateChannels);
+    QString serverOutputBuffer;
+    bool restartRequested = false;
 
     const auto refreshPorts = [port, log] {
-        const QString previous = port->currentText();
+        const QString previous = selectedPortName(port);
         port->clear();
         for (const QSerialPortInfo &info : QSerialPortInfo::availablePorts())
-            port->addItem(info.systemLocation(), info.description());
-        int preferred = port->findText(QStringLiteral("/dev/ttyACM0"));
-        if (preferred < 0) preferred = port->findText(QStringLiteral("/dev/ttyUSB0"));
-        const int old = port->findText(previous);
+            port->addItem(portLabel(info), info.systemLocation());
+        auto findPort = [port](const QString &name) {
+            for (int i = 0; i < port->count(); ++i) {
+                if (port->itemData(i).toString() == name)
+                    return i;
+            }
+            return -1;
+        };
+        int preferred = findPort(QStringLiteral("/dev/ttyACM0"));
+        if (preferred < 0) preferred = findPort(QStringLiteral("/dev/ttyUSB0"));
+        const QString environmentPort = QString::fromLocal8Bit(qgetenv("QDOCK_SERIAL_DEVICE")).trimmed();
+        const int environmentIndex = findPort(environmentPort);
+        if (environmentIndex >= 0)
+            preferred = environmentIndex;
+        const int old = findPort(previous);
         if (old >= 0) preferred = old;
         if (preferred >= 0) port->setCurrentIndex(preferred);
         if (port->count() == 0) {
@@ -141,11 +247,55 @@ int main(int argc, char *argv[])
         }
     };
     QObject::connect(refresh, &QPushButton::clicked, &window, refreshPorts);
+    QObject::connect(autoStart, &QCheckBox::toggled, &window, [](bool checked) {
+        QSettings settings;
+        settings.setValue(QStringLiteral("serverGui/autoStart"), checked);
+    });
     QObject::connect(clear, &QPushButton::clicked, log, &QPlainTextEdit::clear);
-    QObject::connect(&server, &QProcess::readyRead, &window, [&server, log] {
-        log->moveCursor(QTextCursor::End);
-        log->insertPlainText(QString::fromLocal8Bit(server.readAll()));
-        log->moveCursor(QTextCursor::End);
+    QObject::connect(&server, &QProcess::readyRead, &window, [&server, log, eventCounter, &serverOutputBuffer] {
+        const QByteArray received = server.readAll();
+        appendDiagnostic("server", received);
+        static const QRegularExpression statsPattern(
+            QStringLiteral("qdock stats bytes=\\s*(\\d+)\\s+events=\\s*(\\d+)\\s+discarded=\\s*(\\d+)\\s+pending=\\s*(\\d+)"));
+        serverOutputBuffer += QString::fromLocal8Bit(received);
+        QString visibleText;
+        while (true) {
+            const qsizetype newline = serverOutputBuffer.indexOf(QLatin1Char('\n'));
+            if (newline < 0)
+                break;
+            const QString line = serverOutputBuffer.left(newline + 1);
+            serverOutputBuffer.remove(0, newline + 1);
+            const QRegularExpressionMatch match = statsPattern.match(line);
+            if (match.hasMatch()) {
+                eventCounter->setText(QStringLiteral("Eventos: %1 · Bytes: %2 · Descartados: %3 · Pendientes: %4")
+                                      .arg(match.captured(2), match.captured(1),
+                                           match.captured(3), match.captured(4)));
+                continue;
+            }
+            visibleText += line;
+        }
+        if (!visibleText.isEmpty()) {
+            log->moveCursor(QTextCursor::End);
+            log->insertPlainText(visibleText);
+            log->moveCursor(QTextCursor::End);
+        }
+        const QRegularExpressionMatch pendingStats = statsPattern.match(serverOutputBuffer);
+        if (pendingStats.hasMatch()) {
+            eventCounter->setText(QStringLiteral("Eventos: %1 · Bytes: %2 · Descartados: %3 · Pendientes: %4")
+                                  .arg(pendingStats.captured(2), pendingStats.captured(1),
+                                       pendingStats.captured(3), pendingStats.captured(4)));
+        }
+    });
+    QObject::connect(&kernelLog, &QProcess::readyReadStandardOutput, &window, [&kernelLog] {
+        appendDiagnostic("kernel", kernelLog.readAllStandardOutput());
+    });
+    QObject::connect(&kernelLog, &QProcess::readyReadStandardError, &window, [&kernelLog] {
+        appendDiagnostic("kernel-monitor", kernelLog.readAllStandardError());
+    });
+    QObject::connect(&kernelLog, &QProcess::errorOccurred, &window, [&kernelLog](QProcess::ProcessError error) {
+        appendDiagnostic("kernel-monitor",
+                         QStringLiteral("journalctl -k -f error=%1: %2\n")
+                             .arg(int(error)).arg(kernelLog.errorString()).toUtf8());
     });
     QObject::connect(&server, &QProcess::errorOccurred, &window,
                      [status, log](QProcess::ProcessError) {
@@ -154,11 +304,18 @@ int main(int argc, char *argv[])
         log->appendPlainText(QStringLiteral("No se pudo iniciar o mantener el proceso servidor."));
     });
     QObject::connect(&server, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-                     &window, [=](int code, QProcess::ExitStatus) {
+                     &window, [=, &restartRequested](int code, QProcess::ExitStatus) {
+        const bool shouldRestart = code == restartExitCode;
         status->setText(QStringLiteral("Detenido (código %1)").arg(code));
         status->setStyleSheet(QStringLiteral("color:#d2b36f;font-weight:bold"));
+        eventCounter->setText(QStringLiteral("Eventos: 0 · Bytes: 0 · Descartados: 0 · Pendientes: 0"));
         start->setEnabled(true); stop->setEnabled(false);
-        port->setEnabled(true); refresh->setEnabled(true); ptt->setEnabled(true);
+        port->setEnabled(true); refresh->setEnabled(true); ptt->setEnabled(true); autoStart->setEnabled(true);
+        if (shouldRestart) {
+            restartRequested = true;
+            log->appendPlainText(QStringLiteral("Reinicio solicitado desde cliente LAN; relanzando servidor…"));
+            QTimer::singleShot(700, start, &QPushButton::click);
+        }
     });
     QObject::connect(stop, &QPushButton::clicked, &server, [&server] {
         server.terminate();
@@ -179,7 +336,8 @@ int main(int argc, char *argv[])
             QMessageBox::critical(&window, QStringLiteral("Servidor no encontrado"), executable);
             return;
         }
-        QStringList arguments{QStringLiteral("--serial"), port->currentText().trimmed(),
+        const QString selectedPort = selectedPortName(port);
+        QStringList arguments{QStringLiteral("--serial"), selectedPort,
                               QStringLiteral("--seconds"), QStringLiteral("86400"),
                               QStringLiteral("--listen"), listenAddress->text().trimmed(),
                               QStringLiteral("--port"), QString::number(listenPort->value())};
@@ -191,14 +349,19 @@ int main(int argc, char *argv[])
         QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
         environment.insert(QStringLiteral("QDOCK_LAN_TOKEN"), QString::fromUtf8(token));
         server.setProcessEnvironment(environment);
-        log->appendPlainText(QStringLiteral("Iniciando %1 en %2…")
-                             .arg(QFileInfo(executable).fileName(), port->currentText()));
+        eventCounter->setText(QStringLiteral("Eventos: 0 · Bytes: 0 · Descartados: 0 · Pendientes: 0"));
+        serverOutputBuffer.clear();
+        log->appendPlainText(QStringLiteral("%1 %2 en %3…")
+                             .arg(restartRequested ? QStringLiteral("Reiniciando")
+                                                    : QStringLiteral("Iniciando"),
+                                  QFileInfo(executable).fileName(), selectedPort));
+        restartRequested = false;
         server.start(executable, arguments);
         if (!server.waitForStarted(3000)) return;
         status->setText(QStringLiteral("En ejecución"));
         status->setStyleSheet(QStringLiteral("color:#8fdb9b;font-weight:bold"));
         start->setEnabled(false); stop->setEnabled(true);
-        port->setEnabled(false); refresh->setEnabled(false); ptt->setEnabled(false);
+        port->setEnabled(false); refresh->setEnabled(false); ptt->setEnabled(false); autoStart->setEnabled(false);
     });
 
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &window, [&server] {
@@ -208,6 +371,14 @@ int main(int argc, char *argv[])
     });
 
     refreshPorts();
+    appendDiagnostic("monitor", "Inicio de monitor serie/USB.\n");
+    kernelLog.start(QStringLiteral("journalctl"),
+                    {QStringLiteral("-k"), QStringLiteral("-f"), QStringLiteral("-o"),
+                     QStringLiteral("short-iso-precise")});
+    for (QLabel *label : window.findChildren<QLabel *>())
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     window.show();
+    if (autoStart->isChecked())
+        QTimer::singleShot(0, start, &QPushButton::click);
     return app.exec();
 }

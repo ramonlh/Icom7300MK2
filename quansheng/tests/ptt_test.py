@@ -55,6 +55,9 @@ class Serial:
     def state(self, tx=False):
         os.write(self.fd, bytes((0xb5, 6, 1 if tx else 2, 0, 0, 200)))
 
+    def active_vfo(self, vfo='A'):
+        os.write(self.fd, bytes((0xb5, 7, 1 if vfo == 'A' else 5, 1, 0, 0)))
+
     def key(self, expected, timeout=2):
         deadline = time.monotonic() + timeout
         while len(self.buffer) < 14:
@@ -116,6 +119,8 @@ def server(enabled=True, max_seconds=60, extra=()):
 
 def observed(serial, client, tx=False):
     serial.state(tx)
+    if not tx:
+        serial.active_vfo('A')
     client.until('event')
 
 
@@ -138,6 +143,8 @@ with server(extra=('--allow-frequency-control', '--allow-eeprom-query')) as (_, 
     c.ptt('press')
     assert c.until('ptt_status')['error'] == 'radio_already_transmitting'
     observed(serial, c)
+    serial.active_vfo('B')
+    c.until('display_state', activeVfo='B')
     c.ptt('press')
     c.until('ptt_state', active=True)
     serial.key((16,))
@@ -226,8 +233,10 @@ with server() as (_, serial, connect):
     observed(serial, c)
     time.sleep(5.2)
     c.ptt('press')
-    assert c.until('ptt_status')['error'] == 'radio_state_stale'
-    serial.silent()
+    c.until('ptt_state', active=True)
+    c.ptt('release')
+    c.until('ptt_state', active=False, reason='released')
+    serial.released()
 
 with server() as (_, serial, connect):
     c = connect()
@@ -237,7 +246,7 @@ with server() as (_, serial, connect):
     serial.key((16,))
     os.close(serial.fd)  # Simulate USB/serial disappearance, still only a PTY.
     serial.fd = -1
-    c.until('source_status', status='error')
+    c.until('source_status', status='reconnecting')
     c.ptt('press', 'after-error')
     assert c.until('ptt_status')['error'] == 'ptt_not_enabled'
 

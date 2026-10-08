@@ -35,8 +35,7 @@ int main(int argc, char** argv) {
             if (qdock::experimental::decodeRssiInfo(event, reading)) {
                 QTextStream(stdout) << "{\"rssi_raw\":" << reading.raw
                     << ",\"dbm_uncorrected\":" << qdock::experimental::rssiDbmUncorrected(reading.raw)
-                    << ",\"noise\":" << reading.noise
-                    << ",\"glitch\":" << reading.glitch << "}\n";
+                    << "}\n";
                 app.exit(0); return;
             }
         }

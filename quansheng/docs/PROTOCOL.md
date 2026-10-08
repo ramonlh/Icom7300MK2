@@ -22,6 +22,11 @@ desactiva la otra: OFF ejecuta ambos menús. MENU acepta y EXIT sale; después
 se navega de nuevo para leer el valor aceptado, y finalmente se consultan los
 cuatro menús para publicar RX/TX. La lectura no acepta ningún ajuste.
 
+La lectura manual recorre los cuatro menús. La lectura automática de memoria
+puede solicitar solo `TxCTCS` (menú 06) mediante `read_tones` con
+`txCtcssOnly: true`; el servidor devuelve una respuesta parcial explícita y no
+interpreta los otros tres tonos como `OFF` ni los lee.
+
 Timeout de observación de 2,5 s, escritura serie bloqueada de 3 s, estado RX/TX
 de menos de 5 s. Cancelación ante TX, cambio observado de VFO, pérdida de estado,
 fuente o cliente. La salida intenta liberar tecla y cancelar menú, sin aceptar
@@ -35,6 +40,18 @@ VFO mediante SETTINGS_SaveChannel; en MR Mode=1 no sobrescribe el registro de
 memoria. No se ejecuta el menú ChSave ni se modifica firmware.
 
 Los apartados siguientes conservan el historial del desarrollo.
+
+## Desplazamiento de repetidor desde la GUI
+
+El cliente principal presenta `TxODir` (menú 07: `OFF`, `+`, `-`) y `TxOffs`
+(menú 08) para el VFO activo. La entrada del menú 08 son seis dígitos: el
+firmware calcula `StrToUL(input) * 100` Hz, redondea a `StepFrequency` y limita
+el offset a 99,999,900 Hz. El cliente conserva el valor en unidades de 100 Hz y
+lo convierte a seis dígitos con ceros iniciales antes de recorrer el menú.
+Al leer la pantalla se combinan el número y la etiqueta `MHz` cuando llegan como
+elementos UI separados. El ajuste se acepta mediante el menú del firmware y no
+usa `WriteEeprom`. Pruebas LAN/PTY y de tramas son offline; validación física
+pendiente.
 
 Referencia inspeccionada: QuanshengDock 0.32.22q, commit
 `832e2fc9473de5035a8140cf17289c8d1ca2a1bc`, `Serial/Comms.cs` y `Serial/Packet.cs`.
@@ -130,17 +147,19 @@ ruta de audio), `0x48` (índices de las dos etapas de ganancia y DAC) y `0x49`
 (selección LO y umbrales alto/bajo del RF AGC). `0x37` se transporta únicamente
 en bruto porque su desglose no está suficientemente confirmado.
 
-Para no saturar el enlace serie, `0x38/0x39` se consultan cada dos segundos y se
-publican como `register_frequency_state`; GetRssi conserva su intervalo de un
-segundo. Los otros 14 registros se consultan y publican conjuntamente cada treinta
-segundos. Los valores recientes de `0x38/0x39` se incorporan a la lista bruta sin
-volver a leerlos en la consulta lenta.
+La lectura periódica de `0x38/0x39`, que antes se realizaba cada dos segundos
+para estimar la frecuencia interna del sintetizador, se retiró a petición del
+usuario. GetRssi conserva su intervalo de un segundo; la consulta diagnóstica de
+46 registros sigue cada treinta segundos y no incluye `0x38/0x39`.
 
-La consulta lenta incorpora también `0x43`, `0x4D`, `0x4E`, `0x4F` y `0x78`.
-Se exponen el modo/ancho de filtro receptor y los umbrales brutos de apertura y
-cierre del squelch para RSSI, ruido y glitch, además de sus índices de retardo.
-Los umbrales se mantienen en unidades del registro; no se convierten a dBm ni a
-tiempo hasta disponer de una equivalencia confirmada.
+La consulta lenta incorpora también `0x43`, `0x4E` y `0x78`. Se exponen el
+modo/ancho de filtro receptor, el umbral RSSI de apertura/cierre del squelch y
+sus índices de retardo. Se excluyen los indicadores de ruido/glitch `0x4D`,
+`0x4F`, `0x63` y `0x65`, que no se presentan al operador.
+
+La respuesta a GetRssi sigue incluyendo físicamente RSSI, ruido y glitch en el
+mismo paquete. El servidor y el cliente solo conservan y muestran RSSI; los dos
+campos auxiliares se ignoran.
 
 Se incorporan al mismo lote lento `0x36`, `0x51`, `0x52` y `0x70`. Se publican
 el estado y los índices de bias/ganancia del PA, la habilitación y modo

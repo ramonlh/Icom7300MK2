@@ -18,11 +18,23 @@ class QuanshengClient final : public QObject
     Q_PROPERTY(QString host READ host WRITE setHost NOTIFY connectionSettingsChanged)
     Q_PROPERTY(int port READ port WRITE setPort NOTIFY connectionSettingsChanged)
     Q_PROPERTY(QString token READ token WRITE setToken NOTIFY connectionSettingsChanged)
+    Q_PROPERTY(QString serverLocation READ serverLocation WRITE setServerLocation NOTIFY connectionSettingsChanged)
+    Q_PROPERTY(QVariantList localSerialPorts READ localSerialPorts NOTIFY connectionSettingsChanged)
+    Q_PROPERTY(QString localSerialDevice READ localSerialDevice WRITE setLocalSerialDevice NOTIFY connectionSettingsChanged)
     Q_PROPERTY(bool autoReconnect READ autoReconnect WRITE setAutoReconnect NOTIFY connectionSettingsChanged)
     Q_PROPERTY(bool autoConnectOnStartup READ autoConnectOnStartup WRITE setAutoConnectOnStartup NOTIFY connectionSettingsChanged)
+    Q_PROPERTY(bool autoStartLocalServer READ autoStartLocalServer WRITE setAutoStartLocalServer NOTIFY connectionSettingsChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
     Q_PROPERTY(QString sourceStatus READ sourceStatus NOTIFY stateChanged)
     Q_PROPERTY(bool serialAvailable READ serialAvailable NOTIFY stateChanged)
+    Q_PROPERTY(QString serialPortState READ serialPortState NOTIFY stateChanged)
+    Q_PROPERTY(QString serialPortDevice READ serialPortDevice NOTIFY stateChanged)
+    Q_PROPERTY(QString serialPortError READ serialPortError NOTIFY stateChanged)
+    Q_PROPERTY(QString serialPortUpdatedAt READ serialPortUpdatedAt NOTIFY stateChanged)
+    Q_PROPERTY(QString serialPortBytes READ serialPortBytes NOTIFY stateChanged)
+    Q_PROPERTY(int serialDisconnectCount READ serialDisconnectCount NOTIFY stateChanged)
+    Q_PROPERTY(int serialRecoveryCount READ serialRecoveryCount NOTIFY stateChanged)
+    Q_PROPERTY(QString serialDiagnostic READ serialDiagnostic NOTIFY stateChanged)
     Q_PROPERTY(bool pttPressed READ pttPressed NOTIFY stateChanged)
     Q_PROPERTY(QString pttStatus READ pttStatus NOTIFY stateChanged)
     Q_PROPERTY(bool txControlAvailable READ txControlAvailable NOTIFY stateChanged)
@@ -30,6 +42,9 @@ class QuanshengClient final : public QObject
     Q_PROPERTY(bool frequencyControlAvailable READ frequencyControlAvailable NOTIFY stateChanged)
     Q_PROPERTY(QString frequencyControlStatus READ frequencyControlStatus NOTIFY stateChanged)
     Q_PROPERTY(bool controlBusy READ controlBusy NOTIFY stateChanged)
+    Q_PROPERTY(QVariantMap menuValues READ menuValues NOTIFY stateChanged)
+    Q_PROPERTY(QString menuReadStatus READ menuReadStatus NOTIFY stateChanged)
+    Q_PROPERTY(bool menuReadAvailable READ menuReadAvailable NOTIFY stateChanged)
     Q_PROPERTY(bool toneControlAvailable READ toneControlAvailable NOTIFY stateChanged)
     Q_PROPERTY(QString toneStatus READ toneStatus NOTIFY stateChanged)
     Q_PROPERTY(QString toneLog READ toneLog NOTIFY stateChanged)
@@ -47,9 +62,6 @@ class QuanshengClient final : public QObject
     Q_PROPERTY(int signalOver READ signalOver NOTIFY stateChanged)
     Q_PROPERTY(int rssiRaw READ rssiRaw NOTIFY stateChanged)
     Q_PROPERTY(int rssiDbmUncorrected READ rssiDbmUncorrected NOTIFY stateChanged)
-    Q_PROPERTY(int rssiNoise READ rssiNoise NOTIFY stateChanged)
-    Q_PROPERTY(int rssiGlitch READ rssiGlitch NOTIFY stateChanged)
-    Q_PROPERTY(QString hardwareFrequencyText READ hardwareFrequencyText NOTIFY stateChanged)
     Q_PROPERTY(int hardwareRegisterCount READ hardwareRegisterCount NOTIFY stateChanged)
     Q_PROPERTY(QString hardwareBlocksText READ hardwareBlocksText NOTIFY stateChanged)
     Q_PROPERTY(QString hardwareAgcText READ hardwareAgcText NOTIFY stateChanged)
@@ -73,6 +85,9 @@ class QuanshengClient final : public QObject
     Q_PROPERTY(bool charging READ charging NOTIFY stateChanged)
     Q_PROPERTY(bool dualWatch READ dualWatch NOTIFY stateChanged)
     Q_PROPERTY(bool dualWatchKnown READ dualWatchKnown NOTIFY stateChanged)
+    Q_PROPERTY(bool vox READ vox NOTIFY stateChanged)
+    Q_PROPERTY(bool voxKnown READ voxKnown NOTIFY stateChanged)
+    Q_PROPERTY(int voxLevel READ voxLevel NOTIFY stateChanged)
     Q_PROPERTY(int squelchLevel READ squelchLevel NOTIFY stateChanged)
     Q_PROPERTY(QString lastDtmf READ lastDtmf NOTIFY stateChanged)
     Q_PROPERTY(QString frequencyText READ frequencyText NOTIFY stateChanged)
@@ -108,11 +123,23 @@ public:
     QString host() const { return m_host; }
     int port() const { return m_port; }
     QString token() const { return m_token; }
+    QString serverLocation() const { return m_serverLocation; }
+    QVariantList localSerialPorts() const { return m_localSerialPorts; }
+    QString localSerialDevice() const { return m_localSerialDevice; }
     bool autoReconnect() const { return m_autoReconnect; }
     bool autoConnectOnStartup() const { return m_autoConnectOnStartup; }
+    bool autoStartLocalServer() const { return m_autoStartLocalServer; }
     bool connected() const { return m_socket && m_socket->state() ==  QAbstractSocket::ConnectedState; }
     QString sourceStatus() const { return m_sourceStatus; }
     bool serialAvailable() const { return m_serialAvailable; }
+    QString serialPortState() const { return m_serialPortState; }
+    QString serialPortDevice() const { return m_serialPortDevice; }
+    QString serialPortError() const { return m_serialPortError; }
+    QString serialPortUpdatedAt() const { return m_serialPortUpdatedAt; }
+    QString serialPortBytes() const { return m_serialPortBytes; }
+    int serialDisconnectCount() const { return m_serialDisconnectCount; }
+    int serialRecoveryCount() const { return m_serialRecoveryCount; }
+    QString serialDiagnostic() const { return m_serialDiagnostic; }
     bool pttPressed() const { return m_pttPressed; }
     QString pttStatus() const { return m_pttStatus; }
     bool txControlAvailable() const { return m_txControlAvailable; }
@@ -120,6 +147,9 @@ public:
     bool frequencyControlAvailable() const { return m_frequencyControlAvailable; }
     QString frequencyControlStatus() const { return m_frequencyControlStatus; }
     bool controlBusy() const { return m_controlBusy; }
+    QVariantMap menuValues() const { return m_menuValues; }
+    QString menuReadStatus() const { return m_menuReadStatus; }
+    bool menuReadAvailable() const { return m_menuReadAvailable; }
     bool eepromBusy() const { return m_eepromBusy; }
     QString eepromStatus() const { return m_eepromStatus; }
     QString eepromHexDump() const { return m_eepromHexDump; }
@@ -132,9 +162,6 @@ public:
     int signalOver() const { return m_signalOver; }
     int rssiRaw() const { return m_rssiRaw; }
     int rssiDbmUncorrected() const { return m_rssiDbmUncorrected; }
-    int rssiNoise() const { return m_rssiNoise; }
-    int rssiGlitch() const { return m_rssiGlitch; }
-    QString hardwareFrequencyText() const { return m_hardwareFrequencyText; }
     int hardwareRegisterCount() const { return m_hardwareRegisterCount; }
     QString hardwareBlocksText() const { return m_hardwareBlocksText; }
     QString hardwareAgcText() const { return m_hardwareAgcText; }
@@ -158,6 +185,9 @@ public:
     bool charging() const { return m_charging; }
     bool dualWatch() const { return m_dualWatch; }
     bool dualWatchKnown() const { return m_dualWatchKnown; }
+    bool vox() const { return m_vox; }
+    bool voxKnown() const { return m_voxKnown; }
+    int voxLevel() const { return m_voxLevel; }
     int squelchLevel() const { return m_squelchLevel; }
     QString lastDtmf() const { return m_lastDtmf; }
     QString frequencyText() const { return m_frequencyText; }
@@ -189,27 +219,40 @@ public:
     void setHost(const QString &host);
     void setPort(int port);
     void setToken(const QString &token);
+    void setServerLocation(const QString &location);
+    void setLocalSerialDevice(const QString &device);
     void setAutoReconnect(bool enabled);
     void setAutoConnectOnStartup(bool enabled);
+    void setAutoStartLocalServer(bool enabled);
 
     Q_INVOKABLE void connectToServer();
     Q_INVOKABLE void disconnectFromServer();
+    Q_INVOKABLE void startServerGuiBySsh();
+    Q_INVOKABLE void stopServerGuiBySsh();
+    Q_INVOKABLE void refreshLocalSerialPorts();
+    Q_INVOKABLE void restartServer();
     Q_INVOKABLE void resetCounters();
     Q_INVOKABLE void readEeprom();
     Q_INVOKABLE void setFrequency(const QString &frequencyMHz);
     Q_INVOKABLE void switchVfo();
     Q_INVOKABLE void toggleVfoMode(const QString &vfo);
     Q_INVOKABLE void stepMemory(const QString &vfo, bool up);
+    Q_INVOKABLE void stepFrequency(const QString &vfo, bool up);
     Q_INVOKABLE void setMode(const QString &vfo, const QString &mode);
     Q_INVOKABLE void setDualWatch(bool enabled);
     Q_INVOKABLE void setSquelch(int level);
+    Q_INVOKABLE void setVox(bool enabled);
+    Q_INVOKABLE void setVoxLevel(int level);
+    Q_INVOKABLE void setMenuOption(int menu, int value, const QString &label);
+    Q_INVOKABLE void readMenuValues(const QVariantList &menus,
+                                    bool preserveExisting = false);
     bool toneControlAvailable() const { return m_toneControlAvailable; }
     QString toneStatus() const { return m_toneStatus; }
     QString toneLog() const { return m_toneLog.join(QLatin1Char('\n')); }
     QVariantMap toneState() const { return m_toneState; }
     QVariantMap toneStates() const { return m_toneStates; }
     Q_INVOKABLE QVariantList toneOptions(int type) const;
-    Q_INVOKABLE void readTones(const QString& vfo);
+    Q_INVOKABLE void readTones(const QString& vfo, bool txCtcssOnly = false);
     Q_INVOKABLE void setTone(const QString& vfo, const QString& direction, int type, int index);
     Q_INVOKABLE void clearToneLog();
     Q_INVOKABLE void pressPtt();
@@ -245,6 +288,8 @@ private:
     void retryPendingMemoryToneRead();
     void appendToneLog(const QString &message);
     void finishRadioControlWait();
+    void scheduleMenuWriteReadback();
+    void updateSerialPortStatus(const QJsonObject &object);
 
     QTcpSocket *m_socket = nullptr;
     QTimer m_pttTimer;
@@ -265,23 +310,42 @@ private:
     QString m_host = QStringLiteral("127.0.0.1");
     int m_port = 8765;
     QString m_token;
+    QString m_serverLocation = QStringLiteral("local");
+    QString m_localSerialDevice;
+    QVariantList m_localSerialPorts;
+    QString m_connectionToken;
     bool m_autoReconnect = true;
     bool m_autoConnectOnStartup = false;
+    bool m_autoStartLocalServer = false;
     bool m_reconnectRequested = false;
     bool m_shuttingDown = false;
     QString m_sourceStatus = QStringLiteral("desconectado");
     bool m_serialAvailable = false;
+    QString m_serialPortState = QStringLiteral("unknown");
+    QString m_serialPortDevice;
+    QString m_serialPortError;
+    QString m_serialPortUpdatedAt;
+    QString m_serialPortBytes;
+    int m_serialDisconnectCount = 0;
+    int m_serialRecoveryCount = 0;
+    QString m_serialDiagnostic;
     bool m_txControlAvailable = false;
     bool m_eepromReadAvailable = false;
     bool m_frequencyControlAvailable = false;
     QString m_frequencyControlStatus = QStringLiteral("No disponible");
     bool m_controlBusy = false;
     QString m_controlOperation;
+    QVariantMap m_menuValues;
+    QString m_menuReadStatus = QStringLiteral("Valores sin leer");
+    bool m_menuReadAvailable = false;
     QString m_pendingVfoModeTarget;
     QString m_pendingVfoModePreviousMemory;
     QString m_pendingRadioControl;
+    int m_pendingMenuReadback = -1;
     bool m_pendingDualWatchPrevious = false;
     int m_pendingSquelchPrevious = -1;
+    bool m_pendingVoxPrevious = false;
+    int m_pendingVoxLevelPrevious = 0;
     bool m_eepromBusy = false;
     QString m_eepromStatus = QStringLiteral("Sin leer");
     QString m_eepromHexDump;
@@ -294,9 +358,6 @@ private:
     int m_signalOver = 0;
     int m_rssiRaw = -1;
     int m_rssiDbmUncorrected = 0;
-    int m_rssiNoise = -1;
-    int m_rssiGlitch = -1;
-    QString m_hardwareFrequencyText;
     int m_hardwareRegisterCount = 0;
     QString m_hardwareBlocksText;
     QString m_hardwareAgcText;
@@ -320,6 +381,9 @@ private:
     bool m_charging = false;
     bool m_dualWatch = false;
     bool m_dualWatchKnown = false;
+    bool m_vox = false;
+    bool m_voxKnown = false;
+    int m_voxLevel = 0;
     int m_squelchLevel = -1;
     QString m_lastDtmf;
     QString m_frequencyText;

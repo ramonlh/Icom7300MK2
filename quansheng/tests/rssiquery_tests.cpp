@@ -11,7 +11,7 @@ int main() {
     reply.data = {0x28,0x05,0x04,0x00,0xa4,0x00,0x52,0x06};
     qdock::experimental::RssiReading reading;
     assert(qdock::experimental::decodeRssiInfo(reply, reading));
-    assert(reading.raw == 164 && reading.noise == 82 && reading.glitch == 6);
+    assert(reading.raw == 164);
     assert(qdock::experimental::rssiDbmUncorrected(164) == -78);
     assert(qdock::experimental::rssiDbmUncorrected(345) == 12);
     reply.data[0] = 0x29;

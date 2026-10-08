@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${QDOCK_SERVER_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 SERVER="${PROJECT_DIR}/build/qdock-server"
-DEVICE="/dev/ttyUSB0"
+DEVICE="${QDOCK_SERIAL_DEVICE:-/dev/ttyUSB0}"
 if [[ -z "${QDOCK_LAN_TOKEN:-}" ]]; then
     read -r -s -p "Token LAN nuevo (mínimo 16 caracteres): " QDOCK_LAN_TOKEN
     echo

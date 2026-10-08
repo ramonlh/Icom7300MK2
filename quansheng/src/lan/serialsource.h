@@ -8,7 +8,9 @@
 #include <QMap>
 #include <QObject>
 #include <QSerialPort>
+#include <QSet>
 #include <QTimer>
+#include <QVector>
 
 // Shared acquisition; optional controls have separate explicit permissions.
 class SerialSource final : public QObject {
@@ -24,14 +26,19 @@ public:
     bool txControlAvailable() const { return allowPtt_ && status_ == "listening"; }
     QString requestEepromRead();
     QString requestFrequencyChange(quint32 frequencyHz);
+    QString requestFrequencyStep(const QString& targetVfo, bool up);
     QString requestVfoSwitch();
     QString requestVfoModeToggle(const QString& targetVfo);
     QString requestMemoryStep(const QString& targetVfo, bool up);
     QString requestModeChange(const QString& targetVfo, const QString& mode);
     QString requestDualWatch(bool enabled);
     QString requestSquelch(int level);
+    QString requestVox(int level);
+    QString requestMenuSetting(int menu, int value, const QString& control = {});
+    QString requestMenuValues(QObject* owner, const QVector<int>& menus);
+    void cancelMenuValues(QObject* owner);
     QString requestTones(QObject* owner, const QString& vfo, const QString& direction = {},
-                         int type = -1, int index = -1);
+                         int type = -1, int index = -1, bool txCtcssOnly = false);
     void cancelTones(QObject* owner);
     bool eepromReadAvailable() const { return allowEepromQuery_; }
     bool frequencyControlAvailable() const { return allowFrequencyControl_; }
@@ -45,6 +52,10 @@ private:
     void observeToneMenu(const qdock::Event& event);
     void navigateToneMenu();
     void finishTones(const QString& error = {});
+    void menuReadTick();
+    void observeMenuRead(const qdock::Event& event);
+    void navigateMenuRead();
+    void finishMenuRead(const QString& error = {});
     QObject* toneOwner_ = nullptr;
     QTimer toneTimer_;
     QElapsedTimer toneWait_;
@@ -54,22 +65,57 @@ private:
     QString toneMenuHeader_, toneMenuValue_;
     int toneMenuSelection_ = -1;
     int toneStage_ = 0; // 0=navigate, 1=edit, 2=verify, 3=cleanup
+    bool toneReadTxCtcssOnly_ = false;
     QMap<int, int> toneReadings_;
+    QObject* menuReadOwner_ = nullptr;
+    QTimer menuReadTimer_;
+    QElapsedTimer menuReadWait_;
+    QElapsedTimer menuReadElapsed_;
+    QVector<int> menuReadTasks_;
+    QVector<int> menuReadKeys_;
+    int menuReadIndex_ = 0;
+    int menuReadMenu_ = -1;
+    QString menuReadHeader_;
+    QString menuReadValue_;
+    QString menuReadError_;
+    bool menuReadAwaiting_ = false;
+    bool menuReadCleanup_ = false;
+    bool menuReadPartial_ = false;
     void endPtt(const QString& reason);
     bool writePttKey(bool pressed);
     void finish(const QString& status, const QString& error = {});
+    bool openSerialPort(QString& error);
+    void scheduleSerialReconnect();
+    void attemptSerialReconnect();
+    void beginSerialReconnect(const QString& error);
+    void portOpened();
+    void loadSerialCounters();
+    void saveSerialCounters() const;
+    QString serialPortState() const;
+    QJsonObject serialStatus() const;
     void stats();
     void requestDiagnosticRegisters();
     void requestInitialSquelchLevel();
     void sendNextEepromBlock();
     QSerialPort port_;
     QFile capture_;
+    QTimer serialStatusTimer_, serialReconnectTimer_;
     bool captureRequested_ = false;
     qint64 capturedBytes_ = 0;
-    QTimer statsTimer_, stopTimer_, rssiTimer_, registerTimer_, diagnosticTimer_, eepromTimer_, frequencyTimer_;
+    QTimer statsTimer_, stopTimer_, rssiTimer_, diagnosticTimer_, eepromTimer_, frequencyTimer_;
     qdock::Parser parser_;
     qdock::DisplayModel displayModel_;
-    QString session_, status_ = "not_started", error_;
+    QString session_, status_ = "not_started", error_, requestedPort_;
+    int reconnectAttempt_ = 0;
+    int consecutiveOpenFailures_ = 0;
+    int lastSerialOutageFailures_ = 0;
+    qint64 lastSerialOutageMs_ = -1;
+    QElapsedTimer serialOutageTimer_;
+    QString failureCategory_;
+    quint64 serialDisconnectCount_ = 0;
+    quint64 serialRecoveryCount_ = 0;
+    bool serialRecoveryPending_ = false;
+    quint64 discardedBeforeReconnect_ = 0;
     quint64 sequence_ = 0;
     qint64 bytes_ = 0;
     qsizetype diagnosticRxBytes_ = 0;
@@ -88,6 +134,9 @@ private:
     QElapsedTimer pttLease_, pttDuration_, radioStateAge_;
     QVector<QByteArray> frequencyFrames_;
     QVector<QByteArray> vfoFrames_;
+    QSet<QString> tenHzStepConfiguredVfos_;
+    QString pendingStepConfigVfo_;
+    int pendingStepConfigValue_ = -1;
     bool vfoBusy_ = false;
     bool eepromBusy_ = false;
     bool eepromAwaitingSession_ = false;
@@ -96,6 +145,4 @@ private:
     QByteArray eepromData_;
     int squelchLevel_ = -1;
     QMap<int, int> registerCycle_;
-    QMap<int, int> frequencyCycle_;
-    QMap<int, int> latestFrequencyRegisters_;
 };

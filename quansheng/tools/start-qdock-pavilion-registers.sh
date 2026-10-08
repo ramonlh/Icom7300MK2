@@ -3,7 +3,7 @@ set -u
 
 project_dir="/home/ramon/qdock-readonly"
 program="$project_dir/build/qdock-register-query"
-serial_port="/dev/ttyUSB0"
+serial_port="${QDOCK_SERIAL_DEVICE:-/dev/ttyUSB0}"
 result_file="/tmp/qdock-registers-$(date +%Y%m%d-%H%M%S).jsonl"
 
 echo "QUANSHENG UV-K5 · Lectura experimental de registros BK4819"

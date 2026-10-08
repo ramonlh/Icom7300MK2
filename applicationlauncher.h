@@ -18,6 +18,8 @@ class ApplicationLauncher final : public QObject
                NOTIFY qsstvRunningChanged)
     Q_PROPERTY(bool js8callRunning READ js8callRunning
                NOTIFY js8callRunningChanged)
+    Q_PROPERTY(bool icomVideoRunning READ icomVideoRunning
+               NOTIFY icomVideoRunningChanged)
     Q_PROPERTY(qulonglong rttyFrequencyHz READ rttyFrequencyHz
                WRITE setRttyFrequencyHz NOTIFY digitalFrequenciesChanged)
     Q_PROPERTY(qulonglong cwFrequencyHz READ cwFrequencyHz
@@ -44,10 +46,16 @@ class ApplicationLauncher final : public QObject
                WRITE setCompactWindowWidth NOTIFY compactWindowSizeChanged)
     Q_PROPERTY(bool compactModePreferred READ compactModePreferred
                WRITE setCompactModePreferred NOTIFY compactModePreferredChanged)
+    Q_PROPERTY(QString startupViewMode READ startupViewMode
+               WRITE setStartupViewMode NOTIFY startupViewModeChanged)
     Q_PROPERTY(int mainWindowX READ mainWindowX
                WRITE setMainWindowX NOTIFY mainWindowPositionChanged)
     Q_PROPERTY(int mainWindowY READ mainWindowY
                WRITE setMainWindowY NOTIFY mainWindowPositionChanged)
+    Q_PROPERTY(int memoryQuickWindowX READ memoryQuickWindowX
+               WRITE setMemoryQuickWindowX NOTIFY memoryQuickWindowPositionChanged)
+    Q_PROPERTY(int memoryQuickWindowY READ memoryQuickWindowY
+               WRITE setMemoryQuickWindowY NOTIFY memoryQuickWindowPositionChanged)
     Q_PROPERTY(bool compactAlwaysOnTop READ compactAlwaysOnTop
                WRITE setCompactAlwaysOnTop NOTIFY compactAlwaysOnTopChanged)
     Q_PROPERTY(QString lanHost READ lanHost WRITE setLanHost NOTIFY lanSettingsChanged)
@@ -56,6 +64,7 @@ class ApplicationLauncher final : public QObject
     Q_PROPERTY(bool lanConnectionEnabled READ lanConnectionEnabled WRITE setLanConnectionEnabled NOTIFY lanSettingsChanged)
     Q_PROPERTY(QString bandMemoriesJson READ bandMemoriesJson WRITE setBandMemoriesJson NOTIFY bandMemoriesChanged)
     Q_PROPERTY(QString quanshengBandMemoriesJson READ quanshengBandMemoriesJson WRITE setQuanshengBandMemoriesJson NOTIFY quanshengBandMemoriesChanged)
+    Q_PROPERTY(QString quanshengMenuReadSelectionJson READ quanshengMenuReadSelectionJson WRITE setQuanshengMenuReadSelectionJson NOTIFY quanshengMenuReadSelectionChanged)
     Q_PROPERTY(bool lanConnected READ lanConnected NOTIFY lanConnectionChanged)
     Q_PROPERTY(bool lanDataEnabled READ lanDataEnabled NOTIFY lanDataEnabledChanged)
     Q_PROPERTY(QString lanMode READ lanMode NOTIFY lanModeChanged)
@@ -84,6 +93,9 @@ public:
     [[nodiscard]] bool js8callRunning() const;
     Q_INVOKABLE bool launchJs8call();
     Q_INVOKABLE void stopJs8call();
+    [[nodiscard]] bool icomVideoRunning() const;
+    Q_INVOKABLE bool startIcomVideo();
+    Q_INVOKABLE void stopIcomVideo();
     [[nodiscard]] qulonglong rttyFrequencyHz() const;
     [[nodiscard]] qulonglong cwFrequencyHz() const;
     [[nodiscard]] qulonglong ftFrequencyHz() const;
@@ -112,10 +124,16 @@ public:
     void setCompactWindowWidth(int value);
     [[nodiscard]] bool compactModePreferred() const;
     void setCompactModePreferred(bool value);
+    [[nodiscard]] QString startupViewMode() const;
+    void setStartupViewMode(const QString &value);
     [[nodiscard]] int mainWindowX() const;
     [[nodiscard]] int mainWindowY() const;
     void setMainWindowX(int value);
     void setMainWindowY(int value);
+    [[nodiscard]] int memoryQuickWindowX() const;
+    [[nodiscard]] int memoryQuickWindowY() const;
+    void setMemoryQuickWindowX(int value);
+    void setMemoryQuickWindowY(int value);
     [[nodiscard]] bool compactAlwaysOnTop() const;
     void setCompactAlwaysOnTop(bool value);
     QString lanHost() const;
@@ -139,6 +157,8 @@ public:
     void setBandMemoriesJson(const QString &value);
     QString quanshengBandMemoriesJson() const;
     void setQuanshengBandMemoriesJson(const QString &value);
+    QString quanshengMenuReadSelectionJson() const;
+    void setQuanshengMenuReadSelectionJson(const QString &value);
     Q_INVOKABLE void testLanConnection();
     Q_INVOKABLE void disconnectLanConnection();
     Q_INVOKABLE void testLanMode();
@@ -163,11 +183,14 @@ signals:
     void fldigiRunningChanged();
     void qsstvRunningChanged();
     void js8callRunningChanged();
+    void icomVideoRunningChanged();
     void digitalFrequenciesChanged();
     void compactWindowPositionChanged();
     void compactWindowSizeChanged();
     void compactModePreferredChanged();
+    void startupViewModeChanged();
     void mainWindowPositionChanged();
+    void memoryQuickWindowPositionChanged();
     void compactAlwaysOnTopChanged();
     void lanSettingsChanged();
     void lanFrequencyReceived(qulonglong frequencyHz);
@@ -179,6 +202,7 @@ signals:
     void radioPanelsVisibilityChanged();
     void bandMemoriesChanged();
     void quanshengBandMemoriesChanged();
+    void quanshengMenuReadSelectionChanged();
 
 private:
     bool sendLanCivPayload(const QByteArray &payload, const QString &description,
@@ -194,6 +218,7 @@ private:
     QProcess *m_js8callProcess = nullptr;
     QNetworkAccessManager *m_network = nullptr;
     bool m_js8callUsesFlatpak = false;
+    bool m_icomVideoRunning = false;
     qulonglong m_rttyFrequencyHz = 14080000;
     qulonglong m_cwFrequencyHz = 14060000;
     qulonglong m_ftFrequencyHz = 14074000;
@@ -208,8 +233,11 @@ private:
     int m_superWindowY = -1;
     int m_compactWindowWidth = 780;
     bool m_compactModePreferred = false;
+    QString m_startupViewMode = QStringLiteral("normal");
     int m_mainWindowX = -1;
     int m_mainWindowY = -1;
+    int m_memoryQuickWindowX = -1;
+    int m_memoryQuickWindowY = -1;
     bool m_compactAlwaysOnTop = true;
     QString m_lanHost = QStringLiteral("192.168.1.154");
     QString m_lanUser;

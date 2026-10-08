@@ -12,12 +12,17 @@ std::vector<std::vector<std::uint8_t>> makeVfoSwitchFrames();
 std::vector<std::vector<std::uint8_t>> makeVfoModeToggleFrames(bool selectOther);
 std::vector<std::vector<std::uint8_t>> makeMemoryStepFrames(bool up, bool selectOther);
 std::vector<std::vector<std::uint8_t>> makeModeChangeFrames(std::uint8_t mode, bool selectOther);
+std::vector<std::vector<std::uint8_t>> makeMenuSettingFrames(std::uint8_t menuNumber, std::uint32_t value);
 std::vector<std::vector<std::uint8_t>> makeDualWatchFrames(bool enabled);
 std::vector<std::vector<std::uint8_t>> makeSquelchFrames(std::uint8_t level);
+std::vector<std::vector<std::uint8_t>> makeVoxFrames(std::uint8_t level);
 
 // Converts a VFO frequency in Hz to the six-digit keypad entry used by the
 // stock firmware (frequency in kHz), returning one frame per digit. The
 // caller schedules a release frame between digits.
 std::vector<std::vector<std::uint8_t>> makeFrequencyEntryFrames(std::uint32_t frequencyHz);
+std::vector<std::vector<std::uint8_t>> makeFrequencyChangeFrames(std::uint32_t frequencyHz,
+                                                                 bool configureTenHzStep);
+std::vector<std::vector<std::uint8_t>> makeFrequencyStepFrames(bool up, bool configureTenHzStep);
 
 }

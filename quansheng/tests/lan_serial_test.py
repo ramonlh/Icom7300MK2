@@ -23,7 +23,7 @@ env = dict(os.environ, QDOCK_LAN_TOKEN=token)
 
 @contextmanager
 def server(device, seconds=10, capture=None, fail_writes=False, allow_eeprom=False,
-           allow_frequency=False):
+           allow_frequency=False, allow_register=False):
     args = [exe, '--serial', device, '--seconds', str(seconds), '--port', '0']
     if capture is not None:
         args += ['--capture', str(capture)]
@@ -31,9 +31,13 @@ def server(device, seconds=10, capture=None, fail_writes=False, allow_eeprom=Fal
         args += ['--allow-eeprom-query']
     if allow_frequency:
         args += ['--allow-frequency-control']
+    if allow_register:
+        args += ['--allow-register-query']
     def limit_file_writes():
         signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
-    proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    state_dir = tempfile.TemporaryDirectory()
+    server_env = dict(env, XDG_STATE_HOME=state_dir.name)
+    proc = subprocess.Popen(args, env=server_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             preexec_fn=limit_file_writes if fail_writes else None)
     try:
         assert select.select([proc.stdout], [], [], 5)[0], 'startup timeout'
@@ -43,6 +47,7 @@ def server(device, seconds=10, capture=None, fail_writes=False, allow_eeprom=Fal
     finally:
         proc.terminate()
         proc.communicate(timeout=5)
+        state_dir.cleanup()
 
 
 @contextmanager
@@ -69,6 +74,7 @@ def until(stream, kind):
 
 
 XOR_KEY = bytes.fromhex('16 6c 14 e6 2e 91 0d 40 21 35 d5 40 13 03 e9 80')
+SERIAL_BUFFERS = {}
 
 
 def radio_reply(payload):
@@ -80,7 +86,7 @@ def radio_reply(payload):
 
 
 def read_serial_frame(master):
-    data = bytearray()
+    data = SERIAL_BUFFERS.setdefault(master, bytearray())
     deadline = time.monotonic() + 2
     while len(data) < 4 or len(data) < int.from_bytes(data[2:4], 'little') + 8:
         assert time.monotonic() < deadline, 'serial request timeout'
@@ -88,12 +94,16 @@ def read_serial_frame(master):
             data.extend(os.read(master, 4096))
     size = int.from_bytes(data[2:4], 'little')
     payload = bytes(data[4 + i] ^ XOR_KEY[i % 16] for i in range(size))
+    del data[:size + 8]
     return payload
 
 
 master, slave = pty.openpty()
+serial_link_dir = tempfile.TemporaryDirectory()
+serial_link = Path(serial_link_dir.name) / 'radio-serial'
+serial_link.symlink_to(os.ttyname(slave))
 try:
-    with server(os.ttyname(slave)) as (proc, port):
+    with server(str(serial_link)) as (proc, port):
         attrs = termios.tcgetattr(slave)
         assert attrs[4] == attrs[5] == termios.B38400
         assert attrs[2] & termios.CSIZE == termios.CS8
@@ -104,7 +114,15 @@ try:
         with client(port) as (a, sa, first), client(port) as (b, sb, second):
             assert first['status'] == second['status'] == 'listening'
             assert first['portOpen'] and first['session'] == second['session']
+            assert first['portState'] == 'open'
+            assert first['portName'] == str(serial_link)
             assert first['nextSequence'] == '1'
+            heartbeat = until(sa, 'serial_status')
+            assert heartbeat['portState'] == 'open' and heartbeat['portOpen']
+            assert heartbeat['portName'] == str(serial_link)
+            assert heartbeat['status'] == 'listening'
+            assert heartbeat['serialDisconnectCount'] == '0'
+            assert heartbeat['serialRecoveryCount'] == '0'
             os.write(master, bytes.fromhex('b5 06'))
             os.write(master, bytes.fromhex('84 00 00 c5'))
             ea, eb = until(sa, 'event'), until(sb, 'event')
@@ -122,26 +140,62 @@ try:
             assert not select.select([master], [], [], 0)[0], 'unexpected serial output'
             os.close(master)
             master = None
-            error = until(sb, 'source_status')
-            assert error['status'] == 'error' and not error['portOpen']
+            disconnected = until(sb, 'source_status')
+            assert disconnected['status'] == 'reconnecting' and not disconnected['portOpen']
+            assert disconnected['serialDisconnectCount'] == '1'
+            assert disconnected['serialRecoveryCount'] == '0'
             assert proc.poll() is None, 'serial failure killed LAN service'
             b.sendall(b'{"message":"ping"}\n')
             assert until(sb, 'pong')['message'] == 'pong'
+
+            os.close(slave)
+            master, slave = pty.openpty()
+            serial_link.unlink()
+            serial_link.symlink_to(os.ttyname(slave))
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                message = json.loads(sb.readline())
+                if (message.get('message') == 'source_status'
+                        and message.get('status') == 'listening'
+                        and message.get('portOpen')):
+                    break
+            else:
+                raise AssertionError('serial source did not reconnect')
+            assert message['session'] == second['session']
+            assert message['serialDisconnectCount'] == '1'
+            assert message['serialRecoveryCount'] == '1'
+            os.write(master, bytes.fromhex('b5 06 84 00 00 c5'))
+            recovered_event = until(sb, 'event')
+            assert recovered_event['sequence'] == '4'
             with client(port) as (_, _, after):
-                assert after['status'] == 'error' and after['session'] == second['session']
+                assert after['status'] == 'listening' and after['session'] == second['session']
 finally:
     if master is not None:
         os.close(master)
     os.close(slave)
+    serial_link_dir.cleanup()
 
 # Active memory navigation is opt-in and must not close the LAN connection.
 master, slave = pty.openpty()
 try:
-    with server(os.ttyname(slave), allow_frequency=True) as (proc, port):
+    with server(os.ttyname(slave), seconds=30, allow_frequency=True) as (proc, port):
         with client(port) as (sock, stream, _):
+            sock.sendall(b'{"message":"set_mode","vfo":"A","mode":"FM"}\n')
+            unknown_vfo = until(stream, 'vfo_status')
+            assert unknown_vfo['status'] == 'error'
+            assert unknown_vfo['error'] == 'active_vfo_unknown'
+            assert not select.select([master], [], [], 0)[0], 'mode command toggled an unknown VFO'
+            os.write(master, bytes.fromhex('b5 07 01 01 00 00'))
+            selected = until(stream, 'display_state')
+            assert selected['activeVfo'] == 'A'
+            sock.sendall(b'{"message":"step_frequency","vfo":"A","direction":"up"}\n')
+            rejected_step = until(stream, 'vfo_status')
+            assert rejected_step['status'] == 'error'
+            assert rejected_step['error'] == 'frequency_vfo_required'
+            assert not select.select([master], [], [], 0)[0], 'frequency step bypassed VFO-mode check'
             sock.sendall(b'{"message":"memory_step","vfo":"A","direction":"up"}\n')
             assert until(stream, 'vfo_status')['status'] == 'starting'
-            expected_keys = [15, 19, 2, 19, 11, 19]
+            expected_keys = [11, 19]
             for expected in expected_keys:
                 assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
             assert until(stream, 'vfo_status')['status'] in ('sent', 'complete')
@@ -151,8 +205,7 @@ try:
                     break
             sock.sendall(b'{"message":"set_mode","vfo":"A","mode":"RAW"}\n')
             assert until(stream, 'vfo_status')['status'] == 'starting'
-            expected_mode_keys = [15, 19, 2, 19,
-                                  10, 19, 1, 19, 3, 19, 10, 19,
+            expected_mode_keys = [10, 19, 1, 19, 3, 19, 10, 19,
                                   4, 19, 10, 19, 13, 19]
             for expected in expected_mode_keys:
                 assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
@@ -174,9 +227,61 @@ try:
                 assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
             while until(stream, 'vfo_status')['status'] != 'complete':
                 pass
+            sock.sendall(b'{"message":"set_vox","level":5}\n')
+            assert until(stream, 'vfo_status')['status'] == 'starting'
+            for expected in [10, 19, 5, 19, 7, 19, 10, 19,
+                             5, 19, 10, 19, 13, 19]:
+                assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
+            while until(stream, 'vfo_status')['status'] != 'complete':
+                pass
+            sock.sendall(b'{"message":"set_menu","menu":29,"value":3,"control":"tx_timeout"}\n')
+            assert until(stream, 'vfo_status')['status'] == 'starting'
+            for expected in [10, 19, 2, 19, 9, 19, 10, 19,
+                             3, 19, 10, 19, 13, 19]:
+                assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
+            while until(stream, 'vfo_status')['status'] != 'complete':
+                pass
+            sock.sendall(b'{"message":"set_menu","menu":29,"value":10,"control":"tx_timeout"}\n')
+            assert until(stream, 'vfo_status')['status'] == 'starting'
+            for expected in [10, 19, 2, 19, 9, 19, 10, 19,
+                             1, 19, 0, 19, 10, 19, 13, 19]:
+                assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
+            while until(stream, 'vfo_status')['status'] != 'complete':
+                pass
+            sock.sendall(b'{"message":"set_menu","menu":8,"value":60000,"control":"repeater_offset"}\n')
+            assert until(stream, 'vfo_status')['status'] == 'starting'
+            for expected in [10, 19, 8, 19, 10, 19,
+                             0, 19, 0, 19, 0, 19, 6, 19, 0, 19, 0, 19,
+                             10, 19, 13, 19]:
+                assert read_serial_frame(master) == bytes((1, 8, 2, 0, expected, 0))
+            while until(stream, 'vfo_status')['status'] != 'complete':
+                pass
+            sock.sendall(b'{"message":"set_menu","menu":8,"value":60001,"control":"invalid_offset"}\n')
+            invalid = until(stream, 'vfo_status')
+            assert invalid['status'] == 'error' and invalid['error'] == 'menu_unavailable'
             assert proc.poll() is None, 'memory step killed LAN service'
             sock.sendall(b'{"message":"ping"}\n')
             assert until(stream, 'pong')['message'] == 'pong'
+finally:
+    os.close(master)
+    os.close(slave)
+
+# Register telemetry no longer polls the synthesizer frequency registers.
+master, slave = pty.openpty()
+try:
+    with server(os.ttyname(slave), seconds=10, allow_register=True) as (_, port):
+        with client(port):
+            time.sleep(2.5)
+            assert not select.select([master], [], [], 0)[0], 'unexpected 2 s internal-frequency query'
+            assert select.select([master], [], [], 2)[0], 'diagnostic register query not sent'
+            request = read_serial_frame(master)
+            assert request[:2] == bytes.fromhex('51 08')
+            count = request[4]
+            addresses = [request[6 + index * 2] for index in range(count)]
+            assert count == 46
+            assert 0x38 not in addresses and 0x39 not in addresses
+            assert 0x4d not in addresses and 0x4f not in addresses
+            assert 0x63 not in addresses and 0x65 not in addresses
 finally:
     os.close(master)
     os.close(slave)
@@ -300,14 +405,12 @@ finally:
     os.close(master)
     os.close(slave)
 
-# Opening failure is reported to subscribers, including by the shipped CLI.
+# Opening failure keeps the LAN service alive while the serial path is retried.
 with server('/nonexistent/qdock-test-port') as (proc, port):
     with client(port) as (_, _, status):
-        assert status['status'] == 'error' and not status['portOpen']
-    cli = Path(__file__).resolve().parents[1] / 'tools/lan_client.py'
-    result = subprocess.run([sys.executable, str(cli), '--port', str(port)],
-                            env=env, capture_output=True, text=True, timeout=5)
-    assert result.returncode == 1 and 'Fuente serie:' in result.stderr
+        assert status['status'] == 'reconnecting' and not status['portOpen']
+        assert status['portState'] == 'reconnecting'
+        assert status['portName'] == '/nonexistent/qdock-test-port'
     assert proc.poll() is None
 
 # Raw capture includes noise and partial frames even before any LAN subscription.

@@ -1,6 +1,7 @@
 #include "remoteserver.h"
 
 #include "radiocontroller.h"
+#include "quanshengclient.h"
 
 #include <QAbstractSocket>
 #include <QAudioDevice>
@@ -26,7 +27,9 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <utility>
 
 namespace {
 constexpr qsizetype kMaximumRequestBytes = 64 * 1024;
@@ -114,6 +117,24 @@ bool jsonBool(const QJsonValue &value, bool *ok)
     }
     *ok = false;
     return false;
+}
+
+bool validRemoteQuanshengMenuValue(int menu, int value)
+{
+    static constexpr std::array<std::pair<int, int>, 62> ranges{{
+        {-1,-1}, {0,23}, {0,2}, {0,208}, {0,50}, {0,208}, {0,50}, {0,2},
+        {-1,-1}, {0,1}, {0,10}, {0,1}, {0,3}, {0,4}, {0,1}, {0,1}, {-1,-1},
+        {-1,-1}, {-1,-1}, {0,2}, {-1,-1}, {-1,-1}, {0,2}, {0,10}, {0,10},
+        {0,10}, {0,10}, {0,10}, {0,1}, {0,10}, {0,4}, {0,4}, {0,1}, {0,3},
+        {0,3}, {0,2}, {0,7}, {0,9}, {1,10}, {0,3}, {0,1}, {0,2}, {0,1},
+        {0,10}, {0,199}, {-1,-1}, {-1,-1}, {-1,-1}, {0,4}, {0,1}, {0,3},
+        {5,60}, {3,99}, {0,1}, {-1,-1}, {0,1}, {0,1}, {0,9}, {-1,-1}, {0,3},
+        {0,1}, {0,9}
+    }};
+    if (menu < 1 || menu >= int(ranges.size()))
+        return false;
+    const auto [minimum, maximum] = ranges[size_t(menu)];
+    return minimum >= 0 && value >= minimum && value <= maximum;
 }
 
 
@@ -237,9 +258,12 @@ const RemoteBandDefinition *remoteBandForFrequency(qint64 frequencyHz)
 }
 }
 
-RemoteServer::RemoteServer(RadioController *radioController, QObject *parent)
+RemoteServer::RemoteServer(RadioController *radioController,
+                           QuanshengClient *quanshengClient,
+                           QObject *parent)
     : QObject(parent),
       m_radio(radioController),
+      m_quansheng(quanshengClient),
       m_server(new QTcpServer(this)),
       m_clientTimer(new QTimer(this))
 {
@@ -814,6 +838,12 @@ void RemoteServer::processRequest(QTcpSocket *socket, const QByteArray &request)
         return;
     }
 
+    if (method == "GET" && (path == "/quansheng" || path == "/quansheng/")) {
+        sendResponse(socket, 200, QByteArrayLiteral("text/html; charset=utf-8"),
+                     loadQuanshengWebPage());
+        return;
+    }
+
     if (method == "GET" && path == "/api/info") {
         QJsonObject info;
         info.insert(QStringLiteral("application"), QStringLiteral("Control IC-7300MK2"));
@@ -839,6 +869,33 @@ void RemoteServer::processRequest(QTcpSocket *socket, const QByteArray &request)
         sendResponse(socket, 200,
                      QByteArrayLiteral("application/json; charset=utf-8"),
                      radioStateJson());
+        return;
+    }
+
+    if (path.startsWith("/api/quansheng/") && !authorized(headers)) {
+        sendResponse(socket, 401,
+                     QByteArrayLiteral("application/json; charset=utf-8"),
+                     jsonMessage(QStringLiteral("Token de acceso no válido"), false),
+                     {{QByteArrayLiteral("WWW-Authenticate"), QByteArrayLiteral("Bearer")}});
+        return;
+    }
+
+    if (method == "GET" && path == "/api/quansheng/state") {
+        noteClient(socket);
+        sendResponse(socket, 200,
+                     QByteArrayLiteral("application/json; charset=utf-8"),
+                     quanshengStateJson());
+        return;
+    }
+
+    if (method == "POST" && path == "/api/quansheng/command") {
+        noteClient(socket);
+        int httpStatus = 200;
+        QString errorText;
+        const QByteArray response = handleQuanshengCommand(body, &httpStatus, &errorText);
+        sendResponse(socket, httpStatus,
+                     QByteArrayLiteral("application/json; charset=utf-8"),
+                     response);
         return;
     }
 
@@ -1052,6 +1109,307 @@ QByteArray RemoteServer::radioStateJson() const
     }
 
     return QJsonDocument(state).toJson(QJsonDocument::Compact);
+}
+
+QByteArray RemoteServer::quanshengStateJson() const
+{
+    QJsonObject state;
+    if (!m_quansheng) {
+        state.insert(QStringLiteral("connected"), false);
+        state.insert(QStringLiteral("message"), QStringLiteral("Cliente Quansheng no disponible"));
+        return QJsonDocument(state).toJson(QJsonDocument::Compact);
+    }
+
+    state.insert(QStringLiteral("connected"), m_quansheng->connected());
+    state.insert(QStringLiteral("sourceStatus"), m_quansheng->sourceStatus());
+    state.insert(QStringLiteral("serialState"), m_quansheng->serialPortState());
+    state.insert(QStringLiteral("serialDevice"), m_quansheng->serialPortDevice());
+    state.insert(QStringLiteral("serialError"), m_quansheng->serialPortError());
+    state.insert(QStringLiteral("serialUpdatedAt"), m_quansheng->serialPortUpdatedAt());
+    state.insert(QStringLiteral("serialBytes"), m_quansheng->serialPortBytes());
+    state.insert(QStringLiteral("controlAvailable"), m_quansheng->frequencyControlAvailable());
+    state.insert(QStringLiteral("controlBusy"), m_quansheng->controlBusy());
+    state.insert(QStringLiteral("controlStatus"), m_quansheng->frequencyControlStatus());
+    state.insert(QStringLiteral("menuReadAvailable"), m_quansheng->menuReadAvailable());
+    state.insert(QStringLiteral("menuReadStatus"), m_quansheng->menuReadStatus());
+    state.insert(QStringLiteral("menuValues"), QJsonObject::fromVariantMap(m_quansheng->menuValues()));
+    state.insert(QStringLiteral("toneControlAvailable"), m_quansheng->toneControlAvailable());
+    state.insert(QStringLiteral("toneStatus"), m_quansheng->toneStatus());
+    state.insert(QStringLiteral("toneStates"), QJsonObject::fromVariantMap(m_quansheng->toneStates()));
+    state.insert(QStringLiteral("pttAvailable"), m_quansheng->txControlAvailable());
+    state.insert(QStringLiteral("pttPressed"), m_quansheng->pttPressed());
+    state.insert(QStringLiteral("pttStatus"), m_quansheng->pttStatus());
+    state.insert(QStringLiteral("eepromAvailable"), m_quansheng->eepromReadAvailable());
+    state.insert(QStringLiteral("eepromBusy"), m_quansheng->eepromBusy());
+    state.insert(QStringLiteral("eepromStatus"), m_quansheng->eepromStatus());
+    state.insert(QStringLiteral("eepromDump"), m_quansheng->eepromHexDump());
+    state.insert(QStringLiteral("eepromChannelRows"), QJsonArray::fromVariantList(m_quansheng->eepromChannelRows()));
+    state.insert(QStringLiteral("eepromSettingRows"), QJsonArray::fromVariantList(m_quansheng->eepromSettingRows()));
+    state.insert(QStringLiteral("activeVfo"), m_quansheng->activeVfo());
+    state.insert(QStringLiteral("frequency"), m_quansheng->frequencyText());
+    state.insert(QStringLiteral("vfoA"), m_quansheng->vfoAFrequencyText());
+    state.insert(QStringLiteral("vfoB"), m_quansheng->vfoBFrequencyText());
+    state.insert(QStringLiteral("modeA"), m_quansheng->vfoAMode());
+    state.insert(QStringLiteral("modeB"), m_quansheng->vfoBMode());
+    state.insert(QStringLiteral("memoryA"), m_quansheng->vfoAMemory());
+    state.insert(QStringLiteral("memoryB"), m_quansheng->vfoBMemory());
+    state.insert(QStringLiteral("nameA"), m_quansheng->vfoAName());
+    state.insert(QStringLiteral("nameB"), m_quansheng->vfoBName());
+    state.insert(QStringLiteral("powerA"), m_quansheng->vfoAPower());
+    state.insert(QStringLiteral("powerB"), m_quansheng->vfoBPower());
+    state.insert(QStringLiteral("stepA"), m_quansheng->vfoAStep());
+    state.insert(QStringLiteral("stepB"), m_quansheng->vfoBStep());
+    state.insert(QStringLiteral("signal"), m_quansheng->signalLevel());
+    state.insert(QStringLiteral("signalOver"), m_quansheng->signalOver());
+    state.insert(QStringLiteral("candidateState"), m_quansheng->candidateState());
+    state.insert(QStringLiteral("rssiRaw"), m_quansheng->rssiRaw());
+    state.insert(QStringLiteral("rssiDbm"), m_quansheng->rssiDbmUncorrected());
+    state.insert(QStringLiteral("batteryPercent"), m_quansheng->batteryPercent());
+    state.insert(QStringLiteral("batteryVolts"), m_quansheng->batteryVolts());
+    state.insert(QStringLiteral("charging"), m_quansheng->charging());
+    state.insert(QStringLiteral("squelch"), m_quansheng->squelchLevel());
+    state.insert(QStringLiteral("vox"), m_quansheng->vox());
+    state.insert(QStringLiteral("voxKnown"), m_quansheng->voxKnown());
+    state.insert(QStringLiteral("voxLevel"), m_quansheng->voxLevel());
+    state.insert(QStringLiteral("dualWatch"), m_quansheng->dualWatch());
+    state.insert(QStringLiteral("dualWatchKnown"), m_quansheng->dualWatchKnown());
+    state.insert(QStringLiteral("stepText"), m_quansheng->stepText());
+    state.insert(QStringLiteral("toneIndicator"), m_quansheng->toneIndicator());
+    state.insert(QStringLiteral("lastDtmf"), m_quansheng->lastDtmf());
+    state.insert(QStringLiteral("indicators"), m_quansheng->indicatorsText());
+    state.insert(QStringLiteral("registerCount"), m_quansheng->hardwareRegisterCount());
+    state.insert(QStringLiteral("registerRows"), QJsonArray::fromVariantList(m_quansheng->hardwareRegisterRows()));
+    state.insert(QStringLiteral("hardwareBlocks"), m_quansheng->hardwareBlocksText());
+    state.insert(QStringLiteral("hardwareAgc"), m_quansheng->hardwareAgcText());
+    state.insert(QStringLiteral("hardwareAfc"), m_quansheng->hardwareAfcText());
+    state.insert(QStringLiteral("hardwareFunctions"), m_quansheng->hardwareFunctionsText());
+    state.insert(QStringLiteral("hardwareScan"), m_quansheng->hardwareScanText());
+    state.insert(QStringLiteral("hardwareFilter"), m_quansheng->hardwareFilterText());
+    state.insert(QStringLiteral("hardwareSquelch"), m_quansheng->hardwareSquelchText());
+    state.insert(QStringLiteral("hardwareCss"), m_quansheng->hardwareCssText());
+    state.insert(QStringLiteral("hardwareDtmf"), m_quansheng->hardwareDtmfText());
+    state.insert(QStringLiteral("hardwareTones"), m_quansheng->hardwareTonesText());
+    state.insert(QStringLiteral("hardwareGpio"), m_quansheng->hardwareGpioText());
+    state.insert(QStringLiteral("hardwareAudio"), m_quansheng->hardwareAudioText());
+    state.insert(QStringLiteral("hardwareRfAgc"), m_quansheng->hardwareRfAgcText());
+    state.insert(QStringLiteral("hardwarePa"), m_quansheng->hardwarePaText());
+    state.insert(QStringLiteral("eventBytes"), QString::number(m_quansheng->bytesReceived()));
+    state.insert(QStringLiteral("discardedBytes"), QString::number(m_quansheng->discardedBytes()));
+    state.insert(QStringLiteral("pendingBytes"), m_quansheng->pendingBytes());
+    state.insert(QStringLiteral("eventSilence"), m_quansheng->eventSilenceSeconds());
+    state.insert(QStringLiteral("eventStalled"), m_quansheng->eventStreamStalled());
+    state.insert(QStringLiteral("observationAge"), m_quansheng->observationAgeSeconds());
+    state.insert(QStringLiteral("lastObservation"), m_quansheng->lastObservationText());
+    state.insert(QStringLiteral("lastObservationAt"), m_quansheng->lastObservationAt());
+    state.insert(QStringLiteral("eventCount"), QString::number(m_quansheng->eventCount()));
+    state.insert(QStringLiteral("error"), m_quansheng->error());
+    return QJsonDocument(state).toJson(QJsonDocument::Compact);
+}
+
+QByteArray RemoteServer::handleQuanshengCommand(const QByteArray &body,
+                                               int *httpStatus,
+                                               QString *errorText)
+{
+    const auto fail = [httpStatus, errorText](int status, const QString &message) {
+        *httpStatus = status;
+        *errorText = message;
+        return jsonMessage(message, false);
+    };
+    if (!m_quansheng)
+        return fail(503, QStringLiteral("Cliente Quansheng no disponible"));
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject())
+        return fail(400, QStringLiteral("JSON no válido"));
+
+    const QJsonObject object = document.object();
+    const QString command = object.value(QStringLiteral("command")).toString();
+    const QJsonValue value = object.value(QStringLiteral("value"));
+
+    const auto invoke = [this](const char *method) {
+        return QMetaObject::invokeMethod(m_quansheng, method);
+    };
+    if (command == QStringLiteral("connect"))
+        return invoke("connectToServer") ? jsonMessage(QStringLiteral("Conectando al servidor Quansheng"), true)
+                                           : fail(503, QStringLiteral("No se pudo conectar"));
+    if (command == QStringLiteral("disconnect"))
+        return invoke("disconnectFromServer") ? jsonMessage(QStringLiteral("Desconectando del servidor Quansheng"), true)
+                                                : fail(503, QStringLiteral("No se pudo desconectar"));
+    if (command == QStringLiteral("startServerGui"))
+        return invoke("startServerGuiBySsh") ? jsonMessage(QStringLiteral("Solicitado arranque del servidor por SSH"), true)
+                                               : fail(503, QStringLiteral("No se pudo solicitar el arranque"));
+    if (command == QStringLiteral("stopServerGui"))
+        return invoke("stopServerGuiBySsh") ? jsonMessage(QStringLiteral("Solicitada parada del servidor por SSH"), true)
+                                              : fail(503, QStringLiteral("No se pudo solicitar la parada"));
+    if (command == QStringLiteral("resetCounters"))
+        return invoke("resetCounters") ? jsonMessage(QStringLiteral("Contadores reiniciados"), true)
+                                        : fail(503, QStringLiteral("No se pudieron reiniciar los contadores"));
+    if (command == QStringLiteral("restartServer")) {
+        if (!m_quansheng->connected())
+            return fail(503, QStringLiteral("Cliente Quansheng desconectado"));
+        return invoke("restartServer") ? jsonMessage(QStringLiteral("Reinicio solicitado"), true)
+                                        : fail(503, QStringLiteral("No se pudo reiniciar el servidor"));
+    }
+    if (!m_quansheng->connected())
+        return fail(503, QStringLiteral("El cliente Quansheng no está conectado al servidor"));
+    const bool sourceListening = m_quansheng->sourceStatus() == QStringLiteral("listening");
+
+    if (command == QStringLiteral("pttPress") || command == QStringLiteral("pttRelease")) {
+        if (!m_quansheng->txControlAvailable())
+            return fail(403, QStringLiteral("PTT no habilitado en el servidor"));
+        if (command == QStringLiteral("pttPress") && !sourceListening)
+            return fail(503, QStringLiteral("La fuente serie no está disponible para PTT"));
+        return invoke(command == QStringLiteral("pttPress") ? "pressPtt" : "releasePtt")
+            ? jsonMessage(QStringLiteral("PTT actualizado"), true)
+            : fail(503, QStringLiteral("No se pudo cambiar PTT"));
+    }
+    if (command == QStringLiteral("readEeprom")) {
+        if (!sourceListening)
+            return fail(503, QStringLiteral("La fuente serie Quansheng no está escuchando"));
+        if (!m_quansheng->eepromReadAvailable())
+            return fail(403, QStringLiteral("Lectura EEPROM no habilitada en el servidor"));
+        if (m_quansheng->eepromBusy())
+            return fail(409, QStringLiteral("EEPROM ocupada"));
+        return invoke("readEeprom") ? jsonMessage(QStringLiteral("Lectura EEPROM iniciada"), true)
+                                     : fail(503, QStringLiteral("No se pudo leer EEPROM"));
+    }
+    if (command == QStringLiteral("readMenus")) {
+        if (!sourceListening)
+            return fail(503, QStringLiteral("La fuente serie Quansheng no está escuchando"));
+        if (!m_quansheng->menuReadAvailable() || !m_quansheng->frequencyControlAvailable())
+            return fail(403, QStringLiteral("Lectura de menús no habilitada"));
+        const QJsonArray requested = value.toArray();
+        if (requested.isEmpty() || requested.size() > 61)
+            return fail(400, QStringLiteral("Selecciona entre 1 y 61 menús"));
+        QVariantList menus;
+        for (const QJsonValue &item : requested) {
+            const int menu = item.toInt(-1);
+            if (menu < 1 || menu > 61)
+                return fail(400, QStringLiteral("Número de menú fuera de rango"));
+            menus.append(menu);
+        }
+        return QMetaObject::invokeMethod(m_quansheng, "readMenuValues",
+                                         Q_ARG(QVariantList, menus), Q_ARG(bool, false))
+            ? jsonMessage(QStringLiteral("Lectura de menús iniciada"), true)
+            : fail(503, QStringLiteral("No se pudo iniciar la lectura de menús"));
+    }
+    if (command == QStringLiteral("setMenu")) {
+        const int menu = object.value(QStringLiteral("menu")).toInt(-1);
+        const int menuValue = value.toInt(-1);
+        const QString label = object.value(QStringLiteral("label")).toString();
+        if (!validRemoteQuanshengMenuValue(menu, menuValue))
+            return fail(400, QStringLiteral("Menú no editable o valor fuera de sus límites"));
+        if (!m_quansheng->frequencyControlAvailable())
+            return fail(403, QStringLiteral("Control de menús no habilitado"));
+        return QMetaObject::invokeMethod(m_quansheng, "setMenuOption",
+                                         Q_ARG(int, menu), Q_ARG(int, menuValue), Q_ARG(QString, label))
+            ? jsonMessage(QStringLiteral("Ajuste de menú enviado; pendiente de confirmar"), true)
+            : fail(503, QStringLiteral("No se pudo aplicar el menú"));
+    }
+    if (command == QStringLiteral("readTones")) {
+        if (!sourceListening)
+            return fail(503, QStringLiteral("La fuente serie Quansheng no está escuchando"));
+        const QString vfo = object.value(QStringLiteral("vfo")).toString();
+        if (!m_quansheng->toneControlAvailable() || (vfo != "A" && vfo != "B"))
+            return fail(403, QStringLiteral("Lectura de tonos no disponible"));
+        return QMetaObject::invokeMethod(m_quansheng, "readTones",
+                                         Q_ARG(QString, vfo), Q_ARG(bool, false))
+            ? jsonMessage(QStringLiteral("Lectura de tonos iniciada"), true)
+            : fail(503, QStringLiteral("No se pudo leer tonos"));
+    }
+    if (command == QStringLiteral("setTone")) {
+        if (!sourceListening)
+            return fail(503, QStringLiteral("La fuente serie Quansheng no está escuchando"));
+        const QString vfo = object.value(QStringLiteral("vfo")).toString();
+        const QString direction = object.value(QStringLiteral("direction")).toString();
+        const int type = object.value(QStringLiteral("type")).toInt(-1);
+        const int index = object.value(QStringLiteral("index")).toInt(-1);
+        if (!m_quansheng->toneControlAvailable() || (vfo != "A" && vfo != "B")
+            || (direction != "RX" && direction != "TX") || type < 0 || type > 3
+            || index < 0 || index > (type == 0 ? 0 : type == 1 ? 49 : 103))
+            return fail(400, QStringLiteral("Ajuste de tono no válido"));
+        return QMetaObject::invokeMethod(m_quansheng, "setTone",
+                                         Q_ARG(QString, vfo), Q_ARG(QString, direction),
+                                         Q_ARG(int, type), Q_ARG(int, index))
+            ? jsonMessage(QStringLiteral("Tono enviado; pendiente de verificación"), true)
+            : fail(503, QStringLiteral("No se pudo ajustar el tono"));
+    }
+
+    if (!sourceListening)
+        return fail(503, QStringLiteral("La fuente serie Quansheng no está escuchando"));
+
+    if (!m_quansheng->frequencyControlAvailable())
+        return fail(403, QStringLiteral("El servidor Quansheng no tiene habilitados los controles"));
+    if (m_quansheng->controlBusy())
+        return fail(409, QStringLiteral("La radio está ejecutando otra operación"));
+
+    bool accepted = false;
+    if (command == QStringLiteral("frequency")) {
+        const double mhz = value.toDouble(-1.0);
+        if (!value.isDouble() || !std::isfinite(mhz) || mhz < 18.0 || mhz > 1300.0
+            || (mhz > 630.0 && mhz < 840.0))
+            return fail(400, QStringLiteral("Frecuencia no válida (18–1300 MHz; 630–840 MHz excluidos)"));
+        accepted = QMetaObject::invokeMethod(
+            m_quansheng, "setFrequency", Q_ARG(QString, QString::number(mhz, 'f', 6)));
+    } else if (command == QStringLiteral("switchVfo")) {
+        accepted = QMetaObject::invokeMethod(m_quansheng, "switchVfo");
+    } else if (command == QStringLiteral("toggleVfoMode")) {
+        const QString vfo = object.value(QStringLiteral("vfo")).toString();
+        if (vfo != "A" && vfo != "B")
+            return fail(400, QStringLiteral("VFO no válido"));
+        accepted = QMetaObject::invokeMethod(m_quansheng, "toggleVfoMode", Q_ARG(QString, vfo));
+    } else if (command == QStringLiteral("stepMemory")) {
+        const QString vfo = object.value(QStringLiteral("vfo")).toString();
+        const QString direction = value.toString();
+        if ((vfo != "A" && vfo != "B") || (direction != "up" && direction != "down"))
+            return fail(400, QStringLiteral("VFO o dirección no válidos"));
+        accepted = QMetaObject::invokeMethod(m_quansheng, "stepMemory",
+                                              Q_ARG(QString, vfo), Q_ARG(bool, direction == "up"));
+    } else if (command == QStringLiteral("stepFrequency")) {
+        const QString vfo = object.value(QStringLiteral("vfo")).toString();
+        const QString direction = value.toString();
+        if ((vfo != QStringLiteral("A") && vfo != QStringLiteral("B"))
+            || (direction != QStringLiteral("up") && direction != QStringLiteral("down")))
+            return fail(400, QStringLiteral("VFO o dirección no válidos"));
+        accepted = QMetaObject::invokeMethod(
+            m_quansheng, "stepFrequency", Q_ARG(QString, vfo),
+            Q_ARG(bool, direction == QStringLiteral("up")));
+    } else if (command == QStringLiteral("mode")) {
+        const QString vfo = object.value(QStringLiteral("vfo")).toString();
+        const QString mode = value.toString();
+        static const QStringList modes{QStringLiteral("FM"), QStringLiteral("AM"),
+                                       QStringLiteral("USB"), QStringLiteral("BYP"),
+                                       QStringLiteral("RAW")};
+        if ((vfo != QStringLiteral("A") && vfo != QStringLiteral("B"))
+            || !modes.contains(mode))
+            return fail(400, QStringLiteral("VFO o modo no válidos"));
+        accepted = QMetaObject::invokeMethod(
+            m_quansheng, "setMode", Q_ARG(QString, vfo), Q_ARG(QString, mode));
+    } else if (command == QStringLiteral("squelch")
+               || command == QStringLiteral("vox")) {
+        bool ok = false;
+        const int level = value.toInt(-1);
+        ok = value.isDouble() && level >= 0 && level <= 9;
+        if (!ok)
+            return fail(400, QStringLiteral("Nivel fuera de rango"));
+        accepted = QMetaObject::invokeMethod(
+            m_quansheng, command == QStringLiteral("squelch") ? "setSquelch" : "setVoxLevel",
+            Q_ARG(int, level));
+    } else if (command == QStringLiteral("dualWatch")) {
+        bool ok = false;
+        const bool enabled = jsonBool(value, &ok);
+        if (!ok)
+            return fail(400, QStringLiteral("Estado DWR no válido"));
+        accepted = QMetaObject::invokeMethod(
+            m_quansheng, "setDualWatch", Q_ARG(bool, enabled));
+    } else {
+        return fail(400, QStringLiteral("Orden no admitida"));
+    }
+
+    if (!accepted)
+        return fail(503, QStringLiteral("No se pudo enviar la orden al cliente Quansheng"));
+    return jsonMessage(QStringLiteral("Orden enviada; esperando confirmación de la radio"), true);
 }
 
 QByteArray RemoteServer::handleCommand(const QByteArray &body,
@@ -1607,6 +1965,15 @@ QByteArray RemoteServer::loadWebPage() const
     QFile file(QStringLiteral(":/remote/index.html"));
     if (!file.open(QIODevice::ReadOnly)) {
         return QByteArrayLiteral("<!doctype html><html><body><h1>Control IC-7300MK2</h1><p>No se pudo cargar la interfaz remota.</p></body></html>");
+    }
+    return file.readAll();
+}
+
+QByteArray RemoteServer::loadQuanshengWebPage() const
+{
+    QFile file(QStringLiteral(":/remote/quansheng.html"));
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QByteArrayLiteral("<!doctype html><html lang=\"es\"><body><h1>Quansheng UV-K5</h1><p>No se pudo cargar la interfaz remota.</p></body></html>");
     }
     return file.readAll();
 }

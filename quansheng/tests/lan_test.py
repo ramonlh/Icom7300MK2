@@ -115,6 +115,12 @@ with tempfile.TemporaryDirectory() as directory:
         with connect() as sock, sock.makefile('rb') as stream:
             assert receive(stream)['code'] == 'authentication_timeout'
         assert proc.poll() is None
+        with connect() as sock, sock.makefile('rb') as stream:
+            send(sock, {'message': 'hello', 'protocol': 'qdock-lan/1', 'token': token})
+            assert receive(stream)['message'] == 'welcome'
+            send(sock, {'message': 'restart_server'})
+            assert receive(stream) == {'message': 'server_status', 'status': 'restarting'}
+        assert proc.wait(timeout=5) == 75
     finally:
         proc.terminate()
         proc.communicate(timeout=5)

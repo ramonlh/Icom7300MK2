@@ -291,6 +291,11 @@ bool RadioController::transmitting() const { return m_transmitting; }
 bool RadioController::pttOwned() const { return m_pttOwned; }
 bool RadioController::dataMode() const { return m_dataMode; }
 bool RadioController::busy() const { return m_busy; }
+bool RadioController::frequencyWritePending() const
+{
+    return m_queuedWriteKind == WriteKind::Frequency
+           || m_activeWriteKind == WriteKind::Frequency;
+}
 bool RadioController::memoryReadActive() const
 {
     return m_memoryReadBatchActive;

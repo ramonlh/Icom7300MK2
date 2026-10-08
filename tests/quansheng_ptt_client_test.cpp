@@ -54,6 +54,22 @@ int main(int argc, char** argv) {
     require(read()["message"] == "subscribe");
     send({{"message", "source_status"}, {"status", "listening"}});
     waitFor([&] { return client.sourceStatus() == "listening"; });
+    send({{"message", "serial_status"}, {"status", "listening"},
+          {"portState", "open"}, {"portOpen", true},
+          {"portName", "/dev/ttyUSB0"}, {"bytes", "128"},
+          {"serialFailureCategory", "usb-io"}, {"serialLastOutageFailures", 4},
+          {"serialOutageMs", 125000},
+          {"observedAt", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}});
+    waitFor([&] { return client.serialPortState() == "open"
+                       && client.serialPortDevice() == "/dev/ttyUSB0"; });
+    require(client.serialPortDevice() == "/dev/ttyUSB0");
+    require(client.serialPortBytes() == "128" && !client.serialPortUpdatedAt().isEmpty());
+    require(client.serialDiagnostic() == "Enlace estable");
+    send({{"message", "serial_status"}, {"status", "error"},
+          {"portState", "busy"}, {"portOpen", false},
+          {"portName", "/dev/ttyUSB0"}, {"error", "Device or resource busy"}});
+    waitFor([&] { return client.serialPortState() == "busy"; });
+    require(client.serialPortError() == "Device or resource busy");
     require(client.toneOptions(1).size() == 50 && client.toneOptions(3).size() == 104);
     require(client.toneOptions(3).last().toString() == "D754I");
     client.setTone("A", "RX", 1, 50);
@@ -74,13 +90,19 @@ int main(int argc, char** argv) {
     // Another client's failed operation must not release our tone busy flag.
     send({{"message", "vfo_status"}, {"status", "error"}});
     send({{"message", "tone_state"}, {"vfo", "A"}, {"frequency", "145.67500"}, {"memory", "F6"},
-          {"rx", QJsonObject{{"type", 0}, {"index", 0}, {"text", "OFF"}}},
+          {"rx", QJsonObject{{"type", 1}, {"index", 8}, {"text", "88.5 Hz"}}},
           {"tx", QJsonObject{{"type", 3}, {"index", 103}, {"text", "D754I"}}}});
     waitFor([&] { return !client.toneState().isEmpty(); });
     require(client.controlBusy());
     send({{"message", "tone_status"}, {"status", "complete"}});
     waitFor([&] { return !client.controlBusy(); });
     require(client.toneState()["tx"].toMap()["index"].toInt() == 103);
+    const auto dcs = client.toneState()["dcs"].toMap();
+    const auto ctcss = client.toneState()["ctcss"].toMap();
+    require(dcs["rx"].toMap()["text"].toString() == "OFF");
+    require(dcs["tx"].toMap()["text"].toString() == "D754I");
+    require(ctcss["rx"].toMap()["text"].toString() == "88.5 Hz");
+    require(ctcss["tx"].toMap()["text"].toString() == "OFF");
     send({{"message", "display_state"}, {"activeVfo", "B"}});
     waitFor([&] { return client.toneState().isEmpty(); });
     client.pressPtt();
@@ -103,7 +125,7 @@ int main(int argc, char** argv) {
     require(second["action"] == "press" && second["id"] != id);
     send({{"message", "ptt_status"}, {"id", second["id"]}, {"error", "radio_control_busy"}});
     waitFor([&] { return !client.pttPressed(); });
-    require(client.pttStatus().contains("radio_control_busy"));
+    require(client.pttStatus().contains("control serie ocupado"));
     client.pressPtt();
     const auto third = read();
     require(third["action"] == "press");

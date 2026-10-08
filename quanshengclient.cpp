@@ -9,10 +9,21 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QDebug>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QSettings>
 #include <QGuiApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QRandomGenerator>
+#include <QSaveFile>
+#include <QStandardPaths>
+#include <QSerialPortInfo>
+#include <QHostAddress>
 #include <QUuid>
 #include <QTcpSocket>
+#include <unistd.h>
 
 namespace {
 
@@ -30,6 +41,67 @@ QVariantList emptyHardwareRegisterRows()
              QStringLiteral("No leído · interpretación pendiente")}});
     }
     return rows;
+}
+
+QString shellQuote(const QString &value)
+{
+    return QStringLiteral("'") + QString(value).replace(QLatin1Char('\''), QStringLiteral("'\\''"))
+           + QStringLiteral("'");
+}
+
+QString localTokenPath()
+{
+    return QDir::home().filePath(QStringLiteral(".config/qdock/lan-token"));
+}
+
+QByteArray ensureLocalToken(QString &error)
+{
+    const QString path = localTokenPath();
+    QFile existing(path);
+    if (existing.exists()) {
+        if (!existing.open(QIODevice::ReadOnly)) {
+            error = QStringLiteral("No se puede leer el token local: %1").arg(existing.errorString());
+            return {};
+        }
+        const QByteArray token = existing.readAll().trimmed();
+        existing.close();
+        if (token.size() < 16) {
+            error = QStringLiteral("El token local de %1 tiene menos de 16 caracteres.").arg(path);
+            return {};
+        }
+        if (!existing.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+            error = QStringLiteral("No se pudieron restringir los permisos del token local %1")
+                        .arg(path);
+            return {};
+        }
+        return token;
+    }
+
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+        error = QStringLiteral("No se pudo crear %1").arg(QFileInfo(path).absolutePath());
+        return {};
+    }
+    QByteArray token;
+    for (int i = 0; i < 4; ++i)
+        token += QByteArray::number(QRandomGenerator::system()->generate64(), 16).rightJustified(16, '0');
+    QSaveFile file(path);
+    file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    if (!file.open(QIODevice::WriteOnly) || file.write(token + '\n') != token.size() + 1
+        || !file.commit()) {
+        error = QStringLiteral("No se pudo guardar el token local: %1").arg(file.errorString());
+        return {};
+    }
+    return token;
+}
+
+QString localServerGuiPath()
+{
+    const QString besideProject = QDir::cleanPath(
+        QDir(QCoreApplication::applicationDirPath()).filePath(
+            QStringLiteral("../quansheng/build/qdock-server-gui")));
+    if (QFileInfo::exists(besideProject))
+        return besideProject;
+    return QStandardPaths::findExecutable(QStringLiteral("qdock-server-gui"));
 }
 
 } // namespace
@@ -55,8 +127,12 @@ QuanshengClient::QuanshengClient(QObject *parent)
     if (savedPort >= 1 && savedPort <= 65535)
         m_port = savedPort;
     m_token = settings.value(QStringLiteral("quansheng/token"), m_token).toString();
+    m_serverLocation = settings.value(QStringLiteral("quansheng/serverLocation"),
+                                      QStringLiteral("local")).toString();
+    m_localSerialDevice = settings.value(QStringLiteral("quansheng/localSerialDevice")).toString();
     m_autoReconnect = settings.value(QStringLiteral("quansheng/autoReconnect"), true).toBool();
     m_autoConnectOnStartup = settings.value(QStringLiteral("quansheng/autoConnectOnStartup"), false).toBool();
+    m_autoStartLocalServer = settings.value(QStringLiteral("quansheng/autoStartLocalServer"), false).toBool();
 
     m_reconnectTimer.setInterval(5000);
     m_reconnectTimer.setSingleShot(true);
@@ -82,7 +158,7 @@ QuanshengClient::QuanshengClient(QObject *parent)
         }
         const int silence = connected() && m_lastEventReceivedAt.isValid()
             ? qMax(0, m_lastEventReceivedAt.secsTo(now)) : -1;
-        const bool stalled = connected() && m_serialAvailable && silence >= 10;
+        const bool stalled = connected() && m_serialAvailable && silence >= 60;
         if (silence != m_eventSilenceSeconds || stalled != m_eventStreamStalled) {
             m_eventSilenceSeconds = silence;
             m_eventStreamStalled = stalled;
@@ -113,6 +189,7 @@ QuanshengClient::QuanshengClient(QObject *parent)
         m_frequencyControlStatus = QStringLiteral("%1 · sin nueva confirmación de pantalla; controles liberados")
             .arg(m_controlOperation.isEmpty() ? QStringLiteral("Operación") : m_controlOperation);
         m_controlOperation.clear();
+        scheduleMenuWriteReadback();
         emit stateChanged();
     });
 
@@ -159,6 +236,20 @@ void QuanshengClient::finishRadioControlWait()
         ? QStringLiteral("Operación") : m_controlOperation)
         + QStringLiteral(" · confirmado por pantalla");
     m_controlOperation.clear();
+    scheduleMenuWriteReadback();
+}
+
+void QuanshengClient::scheduleMenuWriteReadback()
+{
+    const int menu = m_pendingMenuReadback;
+    m_pendingMenuReadback = -1;
+    if (menu < 1 || menu > 61)
+        return;
+    m_pendingRadioControl.clear();
+    m_pendingMenuReadback = -1;
+    QTimer::singleShot(250, this, [this, menu]() {
+        readMenuValues(QVariantList{menu}, true);
+    });
 }
 
 void QuanshengClient::setHost(const QString &host)
@@ -189,6 +280,62 @@ void QuanshengClient::setToken(const QString &token)
     emit connectionSettingsChanged();
 }
 
+void QuanshengClient::setServerLocation(const QString &location)
+{
+    if (location != QStringLiteral("local") && location != QStringLiteral("remote"))
+        return;
+    if (location == m_serverLocation)
+        return;
+    if (connected() || m_reconnectRequested)
+        disconnectFromServer();
+    m_serverLocation = location;
+    QSettings().setValue(QStringLiteral("quansheng/serverLocation"), m_serverLocation);
+    emit connectionSettingsChanged();
+}
+
+void QuanshengClient::setLocalSerialDevice(const QString &device)
+{
+    const QString value = device.trimmed();
+    if (value.isEmpty() || value == m_localSerialDevice)
+        return;
+    m_localSerialDevice = value;
+    QSettings().setValue(QStringLiteral("quansheng/localSerialDevice"), m_localSerialDevice);
+    emit connectionSettingsChanged();
+}
+
+void QuanshengClient::refreshLocalSerialPorts()
+{
+    QVariantList ports;
+    for (const QSerialPortInfo &info : QSerialPortInfo::availablePorts()) {
+        const QString device = info.systemLocation();
+        if (device.isEmpty())
+            continue;
+        QString label = device;
+        if (!info.description().isEmpty())
+            label += QStringLiteral(" · ") + info.description();
+        ports.append(QVariantMap{{QStringLiteral("device"), device},
+                                 {QStringLiteral("label"), label}});
+    }
+    m_localSerialPorts = ports;
+    if (m_localSerialDevice.isEmpty() && !ports.isEmpty()) {
+        const auto preferredIndex = [&ports](const QString &device) {
+            for (qsizetype i = 0; i < ports.size(); ++i)
+                if (ports.at(i).toMap().value(QStringLiteral("device")).toString() == device)
+                    return i;
+            return qsizetype(-1);
+        };
+        qsizetype selected = preferredIndex(QStringLiteral("/dev/ttyUSB0"));
+        if (selected < 0)
+            selected = preferredIndex(QStringLiteral("/dev/ttyACM0"));
+        if (selected < 0)
+            selected = 0;
+        m_localSerialDevice = ports.at(selected).toMap()
+                                  .value(QStringLiteral("device")).toString();
+        QSettings().setValue(QStringLiteral("quansheng/localSerialDevice"), m_localSerialDevice);
+    }
+    emit connectionSettingsChanged();
+}
+
 void QuanshengClient::setAutoReconnect(bool enabled)
 {
     if (enabled == m_autoReconnect)
@@ -209,16 +356,38 @@ void QuanshengClient::setAutoConnectOnStartup(bool enabled)
     emit connectionSettingsChanged();
 }
 
+void QuanshengClient::setAutoStartLocalServer(bool enabled)
+{
+    if (enabled == m_autoStartLocalServer)
+        return;
+    m_autoStartLocalServer = enabled;
+    QSettings().setValue(QStringLiteral("quansheng/autoStartLocalServer"), m_autoStartLocalServer);
+    emit connectionSettingsChanged();
+}
+
 void QuanshengClient::connectToServer()
 {
     if (m_shuttingDown)
         return;
+    if (m_serverLocation == QStringLiteral("local")) {
+        QString error;
+        m_connectionToken = QString::fromUtf8(ensureLocalToken(error));
+        if (!error.isEmpty()) {
+            m_sourceStatus = error;
+            emit stateChanged();
+            return;
+        }
+    } else {
+        m_connectionToken = m_token;
+    }
     releasePtt();
     m_toneControlAvailable = false;
     m_toneBusy = false;
     m_toneRequestPending = false;
     m_toneState.clear();
     m_toneStates.clear();
+    m_menuValues.clear();
+    m_menuReadStatus = QStringLiteral("Desconectado; valores sin confirmar");
     m_toneStatus = QStringLiteral("Tonos sin leer");
     m_txControlAvailable = false;
     m_reconnectRequested = true;
@@ -228,6 +397,11 @@ void QuanshengClient::connectToServer()
     m_buffer.clear();
     m_sourceStatus = QStringLiteral("conectando");
     m_serialAvailable = false;
+    m_serialPortState = QStringLiteral("unknown");
+    m_serialPortDevice.clear();
+    m_serialPortError.clear();
+    m_serialPortUpdatedAt.clear();
+    m_serialPortBytes.clear();
     m_eepromReadAvailable = false;
     m_frequencyControlAvailable = false;
     m_frequencyControlStatus = QStringLiteral("No disponible");
@@ -238,7 +412,10 @@ void QuanshengClient::connectToServer()
     m_pendingVfoModeTarget.clear();
     m_pendingVfoModePreviousMemory.clear();
     m_pendingRadioControl.clear();
+    m_pendingMenuReadback = -1;
     m_dualWatchKnown = false;
+    m_voxKnown = false;
+    m_voxLevel = 0;
     m_squelchLevel = -1;
     m_eepromBusy = false;
     m_lastEventReceivedAt = {};
@@ -250,9 +427,6 @@ void QuanshengClient::connectToServer()
     m_signalLevel = -1;
     m_signalOver = 0;
     m_rssiRaw = -1;
-    m_rssiNoise = -1;
-    m_rssiGlitch = -1;
-    m_hardwareFrequencyText.clear();
     m_hardwareRegisterCount = 0;
     m_hardwareBlocksText.clear();
     m_hardwareAgcText.clear();
@@ -285,7 +459,9 @@ void QuanshengClient::connectToServer()
     m_vfoAPower.clear();
     m_vfoBPower.clear();
     emit stateChanged();
-    m_socket->connectToHost(m_host, static_cast<quint16>(m_port));
+    m_socket->connectToHost(m_serverLocation == QStringLiteral("local")
+                                ? QStringLiteral("127.0.0.1") : m_host,
+                            static_cast<quint16>(m_port));
 }
 
 void QuanshengClient::shutdown()
@@ -317,6 +493,11 @@ void QuanshengClient::disconnectFromServer()
         m_socket->disconnectFromHost();
     m_sourceStatus = QStringLiteral("desconectado");
     m_serialAvailable = false;
+    m_serialPortState = QStringLiteral("unknown");
+    m_serialPortDevice.clear();
+    m_serialPortError.clear();
+    m_serialPortUpdatedAt.clear();
+    m_serialPortBytes.clear();
     m_frequencyControlAvailable = false;
     m_frequencyControlStatus = QStringLiteral("No disponible");
     m_controlBusy = false;
@@ -327,6 +508,8 @@ void QuanshengClient::disconnectFromServer()
     m_pendingVfoModePreviousMemory.clear();
     m_pendingRadioControl.clear();
     m_dualWatchKnown = false;
+    m_voxKnown = false;
+    m_voxLevel = 0;
     m_squelchLevel = -1;
     m_eepromReadAvailable = false;
     m_eepromBusy = false;
@@ -335,6 +518,153 @@ void QuanshengClient::disconnectFromServer()
     m_eventSilenceSeconds = -1;
     m_eventStreamStalled = false;
     emit stateChanged();
+}
+
+void QuanshengClient::startServerGuiBySsh()
+{
+    if (connected() || m_shuttingDown)
+        return;
+    if (m_serverLocation == QStringLiteral("local")) {
+        QString error;
+        const QByteArray token = ensureLocalToken(error);
+        const QString executable = localServerGuiPath();
+        if (token.isEmpty() || executable.isEmpty()) {
+            m_sourceStatus = !error.isEmpty() ? error
+                : QStringLiteral("No se encuentra qdock-server-gui junto al proyecto ni en PATH");
+            emit stateChanged();
+            return;
+        }
+        if (m_localSerialDevice.isEmpty()) {
+            m_sourceStatus = QStringLiteral("Selecciona el puerto serie local en Configuración");
+            emit stateChanged();
+            return;
+        }
+        QTcpSocket probe;
+        probe.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(m_port));
+        if (probe.waitForConnected(250)) {
+            probe.abort();
+            m_sourceStatus = QStringLiteral("Servidor local ya activo; conectando");
+            m_reconnectRequested = true;
+            emit stateChanged();
+            connectToServer();
+            return;
+        }
+        QProcess process;
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QStringLiteral("QDOCK_LAN_PORT"), QString::number(m_port));
+        environment.insert(QStringLiteral("QDOCK_SERIAL_DEVICE"), m_localSerialDevice);
+        environment.insert(QStringLiteral("QDOCK_GUI_AUTOSTART"), QStringLiteral("1"));
+        process.setProcessEnvironment(environment);
+        process.setProgram(executable);
+        process.setWorkingDirectory(QFileInfo(executable).absolutePath());
+        if (!process.startDetached()) {
+            m_sourceStatus = QStringLiteral("No se pudo arrancar el servidor local");
+            emit stateChanged();
+            return;
+        }
+        m_sourceStatus = QStringLiteral("Arrancando servidor local");
+        m_reconnectRequested = true;
+        emit stateChanged();
+        QTimer::singleShot(2500, this, &QuanshengClient::connectToServer);
+        return;
+    }
+    if (m_host.trimmed().isEmpty() || m_token.size() < 16) {
+        m_sourceStatus = QStringLiteral("SSH: host o token no válido");
+        emit stateChanged();
+        return;
+    }
+    const QString sshTarget = m_host.contains(QLatin1Char('@'))
+        ? m_host.trimmed() : QStringLiteral("ramon@") + m_host.trimmed();
+    const QString serverGui = QStringLiteral("/home/ramon/qdock-readonly/build/qdock-server-gui");
+    const QString portText = QString::number(m_port);
+    const QString guiCommand = QStringLiteral(
+        "device=\"${QDOCK_SERIAL_DEVICE:-}\"; "
+        "if [ -z \"$device\" ]; then if [ -e /dev/ttyACM0 ]; then device=/dev/ttyACM0; else device=/dev/ttyUSB0; fi; fi; "
+        "export DISPLAY=\"${DISPLAY:-:0}\"; "
+        "export XAUTHORITY=\"${XAUTHORITY:-$HOME/.Xauthority}\"; "
+        "export XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\"; "
+        "env QDOCK_LAN_TOKEN=%1 QDOCK_LAN_PORT=%2 QDOCK_SERIAL_DEVICE=\"$device\" QDOCK_GUI_AUTOSTART=1 %3")
+        .arg(shellQuote(m_token), portText, shellQuote(serverGui));
+    const QString remoteCommand = QStringLiteral(
+        "log=/tmp/qdock-server-gui-ssh.log; "
+        "echo \"$(date '+%F %T') solicitud de arranque GUI puerto %1\" >> \"$log\"; "
+        "if pgrep -a -u \"$USER\" -x qdock-server | grep -F -- '--port %1' >/dev/null; then echo \"servidor ya activo\" >> \"$log\"; exit 0; fi; "
+        "if pgrep -u \"$USER\" -f '/home/ramon/qdock-readonly/build/[q]dock-server-gui($| )' >/dev/null; then "
+        "echo \"GUI activa sin servidor; relanzando\" >> \"$log\"; "
+        "pkill -TERM -u \"$USER\" -f '/home/ramon/qdock-readonly/build/[q]dock-server-gui' || true; sleep 1; fi; "
+        "nohup flock -n /tmp/qdock-server-ssh.lock bash -lc %2 >> \"$log\" 2>&1 </dev/null &")
+        .arg(portText, shellQuote(guiCommand));
+    const bool started = QProcess::startDetached(QStringLiteral("ssh"),
+                                                 QStringList{sshTarget, remoteCommand});
+    m_sourceStatus = started ? QStringLiteral("arrancando GUI por SSH")
+                             : QStringLiteral("error arrancando GUI por SSH");
+    m_reconnectRequested = true;
+    emit stateChanged();
+    if (started)
+        QTimer::singleShot(2500, this, &QuanshengClient::connectToServer);
+}
+
+void QuanshengClient::stopServerGuiBySsh()
+{
+    if (m_shuttingDown)
+        return;
+    if (m_serverLocation == QStringLiteral("local")) {
+        const QString pkill = QStandardPaths::findExecutable(QStringLiteral("pkill"));
+        const QStringList processArgs{QStringLiteral("-TERM"), QStringLiteral("-u"),
+                                      QString::number(getuid()), QStringLiteral("-x")};
+        const int serverResult = pkill.isEmpty() ? -1
+            : QProcess::execute(pkill, {QStringLiteral("-TERM"), QStringLiteral("-u"),
+                                         QString::number(getuid()), QStringLiteral("-x"),
+                                         QStringLiteral("qdock-server")});
+        QStringList guiArgs = processArgs;
+        guiArgs.append(QStringLiteral("qdock-server-gui"));
+        const int guiResult = pkill.isEmpty() ? -1
+            : QProcess::execute(pkill, guiArgs);
+        if (m_socket->state() != QAbstractSocket::UnconnectedState)
+            m_socket->abort();
+        m_reconnectRequested = false;
+        m_reconnectTimer.stop();
+        m_sourceStatus = serverResult == 0 || guiResult == 0
+            ? QStringLiteral("Servidor local detenido")
+            : QStringLiteral("No se encontró un servidor local activo");
+        emit stateChanged();
+        return;
+    }
+    if (m_host.trimmed().isEmpty()) {
+        m_sourceStatus = QStringLiteral("SSH: host no válido");
+        emit stateChanged();
+        return;
+    }
+    releasePtt();
+    const QString sshTarget = m_host.contains(QLatin1Char('@'))
+        ? m_host.trimmed() : QStringLiteral("ramon@") + m_host.trimmed();
+    const QString portText = QString::number(m_port);
+    const QString remoteCommand = QStringLiteral(
+        "pkill -TERM -u \"$USER\" -f '/home/ramon/qdock-readonly/build/[q]dock-server .*--port %1' || true; "
+        "pkill -TERM -u \"$USER\" -f '/home/ramon/qdock-readonly/build/[q]dock-server-gui' || true; "
+        "pkill -TERM -u \"$USER\" -f 'flock -n /tmp/qdock-server-ssh.lock bash -lc .*QDOCK_GUI_AUTOSTART=1' || true")
+        .arg(portText);
+    const bool started = QProcess::startDetached(QStringLiteral("ssh"),
+                                                 QStringList{sshTarget, remoteCommand});
+    if (m_socket->state() != QAbstractSocket::UnconnectedState)
+        m_socket->abort();
+    m_reconnectRequested = false;
+    m_reconnectTimer.stop();
+    m_sourceStatus = started ? QStringLiteral("parando GUI por SSH")
+                             : QStringLiteral("error parando GUI por SSH");
+    emit stateChanged();
+}
+
+void QuanshengClient::restartServer()
+{
+    if (!connected() || m_shuttingDown)
+        return;
+    releasePtt();
+    m_reconnectRequested = true;
+    m_sourceStatus = QStringLiteral("reiniciando servidor");
+    m_frequencyControlStatus = QStringLiteral("Servidor reiniciando…");
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("restart_server")}});
 }
 
 void QuanshengClient::resetCounters()
@@ -451,6 +781,22 @@ void QuanshengClient::stepMemory(const QString &vfo, bool up)
                          {QStringLiteral("direction"), up ? QStringLiteral("up") : QStringLiteral("down")} });
 }
 
+void QuanshengClient::stepFrequency(const QString &vfo, bool up)
+{
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy
+        || (vfo != QStringLiteral("A") && vfo != QStringLiteral("B")))
+        return;
+    m_controlOperation = m_activeVfo == vfo
+        ? QStringLiteral("VFO %1: frecuencia %2 10 Hz").arg(vfo, up ? QStringLiteral("+10") : QStringLiteral("-10"))
+        : QStringLiteral("Seleccionar VFO %1 y ajustar %2 10 Hz").arg(vfo, up ? QStringLiteral("+10") : QStringLiteral("-10"));
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("step_frequency")},
+                         {QStringLiteral("vfo"), vfo},
+                         {QStringLiteral("direction"), up ? QStringLiteral("up") : QStringLiteral("down")} });
+}
+
 void QuanshengClient::setMode(const QString &vfo, const QString &mode)
 {
     static const QStringList modes{QStringLiteral("FM"), QStringLiteral("AM"),
@@ -503,15 +849,118 @@ void QuanshengClient::setSquelch(int level)
                          {QStringLiteral("level"), level}});
 }
 
+void QuanshengClient::setVox(bool enabled)
+{
+    setVoxLevel(enabled ? qMax(1, m_voxLevel) : 0);
+}
+
+void QuanshengClient::setVoxLevel(int level)
+{
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy
+        || level < 0 || level > 9 || (m_voxKnown && m_voxLevel == level))
+        return;
+    m_pendingRadioControl = QStringLiteral("vox");
+    m_pendingVoxPrevious = m_vox;
+    m_pendingVoxLevelPrevious = m_voxLevel;
+    m_voxLevel = level;
+    m_vox = level > 0;
+    m_voxKnown = true;
+    m_controlOperation = level > 0 ? QStringLiteral("Ajustar VOX a %1").arg(level)
+                                   : QStringLiteral("Desactivar VOX");
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("set_vox")},
+                         {QStringLiteral("level"), level}});
+}
+
+void QuanshengClient::setMenuOption(int menu, int value, const QString &label)
+{
+    if (menu < 0 || menu > 99 || value < 0
+        || (menu == 8 ? (value > 99999900 || value % 100 != 0) : value > 999)) {
+        m_frequencyControlStatus = QStringLiteral("Opción de menú no válida");
+        emit stateChanged();
+        return;
+    }
+    if (!connected()) {
+        m_frequencyControlStatus = QStringLiteral("Conecta primero con el servidor Quansheng");
+        emit stateChanged();
+        return;
+    }
+    if (!m_frequencyControlAvailable) {
+        m_frequencyControlStatus = QStringLiteral("El servidor no tiene control de menús habilitado");
+        emit stateChanged();
+        return;
+    }
+    if (m_controlBusy) {
+        m_frequencyControlStatus = QStringLiteral("Control de radio ocupado");
+        emit stateChanged();
+        return;
+    }
+    m_menuValues.remove(QString::number(menu));
+    m_pendingMenuReadback = menu;
+    m_menuReadStatus = QStringLiteral("Menú %1 modificado; pendiente de nueva lectura").arg(menu);
+    m_pendingRadioControl = QStringLiteral("menu");
+    const QString text = label.trimmed().isEmpty()
+        ? QStringLiteral("Menú %1").arg(menu)
+        : label.trimmed();
+    m_controlOperation = QStringLiteral("%1: valor %2").arg(text).arg(value);
+    m_frequencyControlStatus = m_controlOperation + QStringLiteral("…");
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("set_menu")},
+                         {QStringLiteral("menu"), menu},
+                         {QStringLiteral("value"), value},
+                         {QStringLiteral("control"), text}});
+}
+
+void QuanshengClient::readMenuValues(const QVariantList &menus, bool preserveExisting)
+{
+    if (!connected() || !m_frequencyControlAvailable || m_controlBusy || menus.isEmpty()) {
+        m_menuReadStatus = !connected() ? QStringLiteral("Conecta con el servidor")
+            : !m_menuReadAvailable ? QStringLiteral("Actualiza el servidor del Pavilion para leer los menús")
+            : !m_frequencyControlAvailable ? QStringLiteral("Lectura de menús no disponible")
+            : m_controlBusy ? QStringLiteral("Control de radio ocupado")
+            : QStringLiteral("No hay menús para leer");
+        emit stateChanged();
+        return;
+    }
+    QJsonArray menuNumbers;
+    for (const auto &menu : menus) {
+        bool ok = false;
+        const int number = menu.toInt(&ok);
+        if (!ok || number < 1 || number > 61) continue;
+        menuNumbers.append(number);
+    }
+    if (menuNumbers.isEmpty()) return;
+    if (!preserveExisting)
+        m_menuValues.clear();
+    for (const auto& value : menuNumbers) {
+        const QString key = QString::number(value.toInt());
+        QVariantMap reading = m_menuValues.value(key).toMap();
+        reading.insert(QStringLiteral("confirmed"), false);
+        reading.insert(QStringLiteral("readState"), QStringLiteral("pending"));
+        m_menuValues.insert(key, reading);
+    }
+    m_menuReadStatus = QStringLiteral("Solicitando lectura de %1 menús…").arg(menuNumbers.size());
+    m_controlBusy = true;
+    emit stateChanged();
+    sendJson(QJsonObject{{QStringLiteral("message"), QStringLiteral("read_menu_values")},
+                         {QStringLiteral("menus"), menuNumbers}});
+}
+
 void QuanshengClient::onConnected()
 {
-    qInfo().noquote() << "Quansheng LAN conectado a" << m_host << m_port;
+    qInfo().noquote() << "Quansheng LAN conectado a"
+                      << (m_serverLocation == QStringLiteral("local")
+                              ? QStringLiteral("127.0.0.1") : m_host)
+                      << m_port;
     m_reconnectTimer.stop();
     emit connectedChanged();
     QJsonObject hello;
     hello.insert(QStringLiteral("message"), QStringLiteral("hello"));
     hello.insert(QStringLiteral("protocol"), QStringLiteral("qdock-lan/1"));
-    hello.insert(QStringLiteral("token"), m_token);
+    hello.insert(QStringLiteral("token"), m_connectionToken);
     sendJson(hello);
 }
 
@@ -527,6 +976,67 @@ void QuanshengClient::onReadyRead()
         if (!line.isEmpty())
             processLine(line);
     }
+}
+
+void QuanshengClient::updateSerialPortStatus(const QJsonObject &object)
+{
+    const QString source = object.value(QStringLiteral("source")).toString();
+    const bool hasPortState = object.contains(QStringLiteral("portState"));
+    const bool portOpen = object.value(QStringLiteral("portOpen")).toBool();
+    const QString error = object.value(QStringLiteral("error")).toString();
+    QString state = object.value(QStringLiteral("portState")).toString();
+    if (!hasPortState) {
+        if (source == QStringLiteral("replay")) {
+            state = QStringLiteral("not_applicable");
+        } else if (portOpen || object.value(QStringLiteral("status")).toString()
+                                      == QStringLiteral("listening")) {
+            state = QStringLiteral("open");
+        } else if (!error.isEmpty()) {
+            const QString normalized = error.toLower();
+            state = normalized.contains(QStringLiteral("busy"))
+                    || normalized.contains(QStringLiteral("ocupado"))
+                ? QStringLiteral("busy") : QStringLiteral("error");
+        } else if (object.contains(QStringLiteral("status"))) {
+            state = QStringLiteral("closed");
+        }
+    }
+    if (!state.isEmpty())
+        m_serialPortState = state;
+    if (object.contains(QStringLiteral("portName"))) {
+        m_serialPortDevice = object.value(QStringLiteral("portName")).toString();
+        if (m_serverLocation == QStringLiteral("local")
+            && m_localSerialDevice.isEmpty() && !m_serialPortDevice.isEmpty()) {
+            m_localSerialDevice = m_serialPortDevice;
+            QSettings().setValue(QStringLiteral("quansheng/localSerialDevice"),
+                                 m_localSerialDevice);
+            emit connectionSettingsChanged();
+        }
+    }
+    if (object.contains(QStringLiteral("error")))
+        m_serialPortError = error;
+    if (object.contains(QStringLiteral("bytes")))
+        m_serialPortBytes = object.value(QStringLiteral("bytes")).toString();
+    if (object.contains(QStringLiteral("serialDisconnectCount")))
+        m_serialDisconnectCount = object.value(QStringLiteral("serialDisconnectCount")).toString().toInt();
+    if (object.contains(QStringLiteral("serialRecoveryCount")))
+        m_serialRecoveryCount = object.value(QStringLiteral("serialRecoveryCount")).toString().toInt();
+    if (object.contains(QStringLiteral("serialFailureCategory"))) {
+        const QString category = object.value(QStringLiteral("serialFailureCategory")).toString();
+        if (state == QStringLiteral("open")) {
+            m_serialDiagnostic = QStringLiteral("Enlace estable");
+        } else {
+            const QString cause = category == QStringLiteral("usb-io") ? QStringLiteral("USB/E/S")
+                : category == QStringLiteral("device-missing") ? QStringLiteral("dispositivo ausente")
+                : category == QStringLiteral("busy") ? QStringLiteral("puerto ocupado")
+                : category == QStringLiteral("permission") ? QStringLiteral("permisos")
+                : category.isEmpty() ? QStringLiteral("sin causa clasificada") : category;
+            m_serialDiagnostic = cause;
+        }
+    }
+    const QDateTime observed = QDateTime::fromString(
+        object.value(QStringLiteral("observedAt")).toString(), Qt::ISODateWithMs);
+    m_serialPortUpdatedAt = (observed.isValid() ? observed.toLocalTime() : QDateTime::currentDateTime())
+                                .toString(QStringLiteral("HH:mm:ss"));
 }
 
 void QuanshengClient::onSocketError(QAbstractSocket::SocketError)
@@ -588,17 +1098,22 @@ QVariantList QuanshengClient::toneOptions(int type) const
     return values;
 }
 
-void QuanshengClient::readTones(const QString& vfo)
+void QuanshengClient::readTones(const QString& vfo, bool txCtcssOnly)
 {
     if (!connected() || !m_toneControlAvailable || m_controlBusy || m_eepromBusy
         || m_pttPressed || m_sourceStatus != "listening" || (vfo != "A" && vfo != "B")) return;
     m_toneRequestPending = true;
     m_controlBusy = true;
-    m_toneState.clear();
-    m_toneStates.remove(vfo);
-    m_toneStatus = QStringLiteral("Solicitando lectura de tonos…");
-    appendToneLog(QStringLiteral("TX read_tones vfo=%1").arg(vfo));
-    sendJson({{"message", "read_tones"}, {"vfo", vfo}});
+    if (!txCtcssOnly) {
+        m_toneState.clear();
+        m_toneStates.remove(vfo);
+    }
+    m_toneStatus = txCtcssOnly
+        ? QStringLiteral("Leyendo TX CTCSS de memoria…")
+        : QStringLiteral("Solicitando lectura de tonos…");
+    appendToneLog(QStringLiteral("TX read_tones vfo=%1 txCtcssOnly=%2")
+                  .arg(vfo, txCtcssOnly ? QStringLiteral("true") : QStringLiteral("false")));
+    sendJson({{"message", "read_tones"}, {"vfo", vfo}, {"txCtcssOnly", txCtcssOnly}});
     emit stateChanged();
 }
 
@@ -637,7 +1152,7 @@ void QuanshengClient::readMemoryTonesIfNeeded(const QString &requestedVfo)
                       << "frecuencia=" + frequency;
     appendToneLog(QStringLiteral("AUTO vfo=%1 activo=%2 memoria=%3 frecuencia=%4")
                   .arg(vfo, m_activeVfo, memory, frequency));
-    readTones(vfo);
+    readTones(vfo, true);
 }
 
 void QuanshengClient::retryPendingMemoryToneRead()
@@ -720,6 +1235,9 @@ void QuanshengClient::processLine(const QByteArray &line)
                                          : QStringLiteral("PTT no habilitado en servidor");
         m_eepromReadAvailable = object.value(QStringLiteral("eepromReadAvailable")).toBool();
         m_frequencyControlAvailable = object.value(QStringLiteral("frequencyControlAvailable")).toBool();
+        m_menuReadAvailable = object.value(QStringLiteral("menuReadAvailable")).toBool();
+        if (!m_menuReadAvailable)
+            m_menuReadStatus = QStringLiteral("Actualiza el servidor del Pavilion para leer los menús");
         m_frequencyControlStatus = m_frequencyControlAvailable ? QStringLiteral("Disponible") : QStringLiteral("No disponible");
         m_sourceStatus = object.value(QStringLiteral("source")).toString();
         m_lastEventReceivedAt = QDateTime::currentDateTimeUtc();
@@ -729,6 +1247,13 @@ void QuanshengClient::processLine(const QByteArray &line)
         QJsonObject subscribe;
         subscribe.insert(QStringLiteral("message"), QStringLiteral("subscribe"));
         sendJson(subscribe);
+    } else if (message == QStringLiteral("server_status")) {
+        const QString status = object.value(QStringLiteral("status")).toString();
+        if (status == QStringLiteral("restarting")) {
+            m_sourceStatus = QStringLiteral("reiniciando servidor");
+            m_frequencyControlStatus = QStringLiteral("Servidor reiniciando…");
+            emit stateChanged();
+        }
     } else if (message == QStringLiteral("ptt_state") || message == QStringLiteral("ptt_status")) {
         if (object.value("id").toString() != m_pttId || m_pttId.isEmpty()) return;
         const bool active = message == "ptt_state" && object.value("active").toBool();
@@ -739,20 +1264,46 @@ void QuanshengClient::processLine(const QByteArray &line)
         }
         const QString error = object.value("error").toString();
         const QString reason = object.value("reason").toString();
-        if (!error.isEmpty()) m_pttStatus = QStringLiteral("Error PTT: %1").arg(error);
+        if (!error.isEmpty()) {
+            QString text = error;
+            if (error == QStringLiteral("radio_state_stale"))
+                text = QStringLiteral("sin estado reciente de la radio");
+            else if (error == QStringLiteral("radio_already_transmitting"))
+                text = QStringLiteral("la radio ya está en TX");
+            else if (error == QStringLiteral("radio_control_busy"))
+                text = QStringLiteral("control serie ocupado");
+            else if (error == QStringLiteral("ptt_not_enabled"))
+                text = QStringLiteral("PTT no habilitado en el servidor");
+            else if (error == QStringLiteral("ptt_requires_vfo_a"))
+                text = QStringLiteral("PTT bloqueado: selecciona VFO A");
+            m_pttStatus = QStringLiteral("Error PTT: %1").arg(text);
+        }
         else if (active) m_pttStatus = QStringLiteral("PTT enviado · TX según radio");
         else if (reason == "released") m_pttStatus = QStringLiteral("PTT liberado");
         else m_pttStatus = QStringLiteral("PTT detenido: %1").arg(reason);
         emit stateChanged();
     } else if (message == QStringLiteral("source_status")) {
         m_sourceStatus = object.value(QStringLiteral("status")).toString();
+        updateSerialPortStatus(object);
+        if (object.contains(QStringLiteral("frequencyControlAvailable"))) {
+            m_frequencyControlAvailable = object.value(QStringLiteral("frequencyControlAvailable")).toBool();
+            m_menuReadAvailable = object.value(QStringLiteral("menuReadAvailable")).toBool();
+            m_eepromReadAvailable = object.value(QStringLiteral("eepromReadAvailable")).toBool();
+            m_txControlAvailable = object.value(QStringLiteral("txControlAvailable")).toBool();
+            m_toneControlAvailable = m_frequencyControlAvailable;
+            m_frequencyControlStatus = m_frequencyControlAvailable
+                ? QStringLiteral("Disponible") : QStringLiteral("No disponible");
+        }
         if (m_sourceStatus != "listening") {
             releasePtt();
-            m_txControlAvailable = false;
+    m_txControlAvailable = false;
+    m_menuReadAvailable = false;
             m_toneControlAvailable = false;
             m_toneBusy = m_toneRequestPending = false;
             m_toneState.clear();
             m_toneStates.clear();
+            m_menuValues.clear();
+            m_menuReadStatus = QStringLiteral("Fuente serie detenida; valores sin confirmar");
             m_toneStatus = QStringLiteral("Fuente serie detenida; tonos sin confirmar");
             m_controlBusy = false;
             m_waitingControlDisplayState = false;
@@ -760,6 +1311,9 @@ void QuanshengClient::processLine(const QByteArray &line)
         }
         if (object.contains(QStringLiteral("error")))
             setError(object.value(QStringLiteral("error")).toString());
+        emit stateChanged();
+    } else if (message == QStringLiteral("serial_status")) {
+        updateSerialPortStatus(object);
         emit stateChanged();
     } else if (message == QStringLiteral("eeprom_status")) {
         const QString status = object.value(QStringLiteral("status")).toString();
@@ -775,6 +1329,75 @@ void QuanshengClient::processLine(const QByteArray &line)
         else
             m_eepromStatus = QStringLiteral("Iniciando sesión EEPROM…");
         emit stateChanged();
+    } else if (message == QStringLiteral("menu_value")) {
+        const int menu = object.value(QStringLiteral("menu")).toInt(-1);
+        if (menu >= 1 && menu <= 61 && object.value(QStringLiteral("confirmed")).toBool()) {
+            const QString observedAt = object.value(QStringLiteral("observedAt")).toString();
+            const QDateTime observedTime = QDateTime::fromString(observedAt, Qt::ISODateWithMs);
+            const qint64 deliveryMs = observedTime.isValid()
+                ? observedTime.msecsTo(QDateTime::currentDateTimeUtc()) : -1;
+            qInfo().noquote() << "Valor de menú recibido en cliente:" << menu
+                              << "entrega tras observación" << deliveryMs << "ms";
+            m_menuValues.insert(QString::number(menu), QVariantMap{
+                {QStringLiteral("displayValue"), object.value(QStringLiteral("displayValue")).toString()},
+                {QStringLiteral("title"), object.value(QStringLiteral("title")).toString()},
+                {QStringLiteral("observedAt"), observedAt},
+                {QStringLiteral("confirmed"), true},
+                {QStringLiteral("readState"), QStringLiteral("confirmed")}});
+        }
+        emit stateChanged();
+    } else if (message == QStringLiteral("menu_read_status")) {
+        const QString status = object.value(QStringLiteral("status")).toString();
+        if (status == QStringLiteral("starting")) {
+            m_controlBusy = true;
+            m_menuReadStatus = QStringLiteral("Leyendo valores de la radio…");
+        } else if (status == QStringLiteral("reading")) {
+            m_menuReadStatus = QStringLiteral("Leídos %1/%2 · menú %3")
+                .arg(object.value(QStringLiteral("read")).toInt())
+                .arg(object.value(QStringLiteral("total")).toInt())
+                .arg(object.value(QStringLiteral("menu")).toInt());
+        } else if (status == QStringLiteral("unavailable")) {
+            const int menu = object.value(QStringLiteral("menu")).toInt(-1);
+            if (menu >= 1 && menu <= 61) {
+                QVariantMap reading = m_menuValues.value(QString::number(menu)).toMap();
+                reading.insert(QStringLiteral("confirmed"), false);
+                reading.insert(QStringLiteral("readState"), QStringLiteral("unconfirmed"));
+                reading.insert(QStringLiteral("title"), object.value(QStringLiteral("title")).toString());
+                m_menuValues.insert(QString::number(menu), reading);
+            }
+            m_menuReadStatus = QStringLiteral("Menú %1 sin lectura confirmable; continuando…")
+                .arg(object.value(QStringLiteral("menu")).toInt());
+        } else if (status == QStringLiteral("complete")) {
+            m_controlBusy = false;
+            for (auto it = m_menuValues.begin(); it != m_menuValues.end(); ++it) {
+                QVariantMap reading = it.value().toMap();
+                if (reading.value(QStringLiteral("readState")).toString() == QStringLiteral("pending")) {
+                    reading.insert(QStringLiteral("confirmed"), false);
+                    reading.insert(QStringLiteral("readState"), QStringLiteral("unconfirmed"));
+                    it.value() = reading;
+                }
+            }
+            m_menuReadStatus = object.value(QStringLiteral("partial")).toBool()
+                ? QStringLiteral("Lectura parcial: %1/%2 menús confirmados")
+                    .arg(m_menuValues.size())
+                    .arg(object.value(QStringLiteral("total")).toInt())
+                : QStringLiteral("Lectura confirmada: %1 menús")
+                    .arg(m_menuValues.size());
+        } else {
+            m_controlBusy = false;
+            for (auto it = m_menuValues.begin(); it != m_menuValues.end(); ++it) {
+                QVariantMap reading = it.value().toMap();
+                if (reading.value(QStringLiteral("readState")).toString() == QStringLiteral("pending")) {
+                    reading.insert(QStringLiteral("confirmed"), false);
+                    reading.insert(QStringLiteral("readState"), QStringLiteral("unconfirmed"));
+                    it.value() = reading;
+                }
+            }
+            m_menuReadStatus = status == QStringLiteral("rejected")
+                ? QStringLiteral("Lectura rechazada: %1").arg(object.value(QStringLiteral("error")).toString())
+                : QStringLiteral("Lectura incompleta: %1").arg(object.value(QStringLiteral("error")).toString());
+        }
+        emit stateChanged();
     } else if (message == QStringLiteral("tone_status")) {
         const QString status = object.value("status").toString();
         if (status == "starting") {
@@ -787,7 +1410,9 @@ void QuanshengClient::processLine(const QByteArray &line)
             m_toneBusy = m_toneRequestPending = false;
             m_controlBusy = false;
             m_toneStatus = status == "complete"
-                ? QStringLiteral("Tonos confirmados por lectura de pantalla")
+                ? (object.value("partial").toBool()
+                   ? QStringLiteral("TX CTCSS confirmado por lectura de pantalla")
+                   : QStringLiteral("Tonos confirmados por lectura de pantalla"))
                 : object.value("error").toString();
             if (status == "error") m_toneState.clear();
             qInfo().noquote() << "Quansheng: lectura de tonos"
@@ -812,7 +1437,28 @@ void QuanshengClient::processLine(const QByteArray &line)
     } else if (message == QStringLiteral("tone_state")) {
         const auto rx = object.value("rx").toObject(), tx = object.value("tx").toObject();
         const QString vfo = object.value("vfo").toString();
-        if ((vfo == "A" || vfo == "B")
+        if (object.value("partial").toBool()) {
+            const QJsonObject ctcssUpdate = object.value("ctcss").toObject();
+            const QJsonObject txCtcss = ctcssUpdate.value("tx").toObject();
+            const int type = txCtcss.value("type").toInt(-1);
+            const int index = txCtcss.value("index").toInt(-1);
+            if ((vfo == "A" || vfo == "B") && (type == 0 || type == 1)
+                && qdock::validTone(type, index)) {
+                QJsonObject normalized = QJsonObject::fromVariantMap(m_toneStates.value(vfo).toMap());
+                if (normalized.value(QStringLiteral("frequency")).toString().isEmpty())
+                    normalized.insert(QStringLiteral("frequency"), object.value(QStringLiteral("frequency")));
+                if (normalized.value(QStringLiteral("memory")).toString().isEmpty())
+                    normalized.insert(QStringLiteral("memory"), object.value(QStringLiteral("memory")));
+                QJsonObject ctcss = normalized.value(QStringLiteral("ctcss")).toObject();
+                ctcss.insert(QStringLiteral("tx"), txCtcss);
+                normalized.insert(QStringLiteral("ctcss"), ctcss);
+                normalized.insert(QStringLiteral("observedAt"), object.value(QStringLiteral("observedAt")));
+                m_toneState = normalized.toVariantMap();
+                m_toneStates.insert(vfo, m_toneState);
+                appendToneLog(QStringLiteral("RX tone_state parcial vfo=%1 CTCSS TX=%2")
+                              .arg(vfo, txCtcss.value(QStringLiteral("text")).toString()));
+            }
+        } else if ((vfo == "A" || vfo == "B")
             && qdock::validTone(rx.value("type").toInt(-1), rx.value("index").toInt(-1))
             && qdock::validTone(tx.value("type").toInt(-1), tx.value("index").toInt(-1))) {
             // A memory tone read can complete before the server has emitted
@@ -829,6 +1475,34 @@ void QuanshengClient::processLine(const QByteArray &line)
                                   vfo == QStringLiteral("B")
                                       ? m_vfoBMemory : m_vfoAMemory);
             }
+            const auto familyTone = [](const QJsonObject &explicitTone,
+                                       const QJsonObject &combinedTone, bool dcs) {
+                const int explicitType = explicitTone.value(QStringLiteral("type")).toInt(-1);
+                const int explicitIndex = explicitTone.value(QStringLiteral("index")).toInt(-1);
+                const bool explicitFamily = dcs
+                    ? explicitType == 2 || explicitType == 3 : explicitType == 1;
+                if (explicitFamily && qdock::validTone(explicitType, explicitIndex))
+                    return explicitTone;
+
+                const int combinedType = combinedTone.value(QStringLiteral("type")).toInt(-1);
+                const int combinedIndex = combinedTone.value(QStringLiteral("index")).toInt(-1);
+                const bool combinedFamily = dcs
+                    ? combinedType == 2 || combinedType == 3 : combinedType == 1;
+                if (combinedFamily && qdock::validTone(combinedType, combinedIndex))
+                    return combinedTone;
+
+                return QJsonObject{{QStringLiteral("type"), 0},
+                                   {QStringLiteral("index"), 0},
+                                   {QStringLiteral("text"), QStringLiteral("OFF")}};
+            };
+            QJsonObject dcs = normalized.value(QStringLiteral("dcs")).toObject();
+            QJsonObject ctcss = normalized.value(QStringLiteral("ctcss")).toObject();
+            dcs.insert(QStringLiteral("rx"), familyTone(dcs.value(QStringLiteral("rx")).toObject(), rx, true));
+            dcs.insert(QStringLiteral("tx"), familyTone(dcs.value(QStringLiteral("tx")).toObject(), tx, true));
+            ctcss.insert(QStringLiteral("rx"), familyTone(ctcss.value(QStringLiteral("rx")).toObject(), rx, false));
+            ctcss.insert(QStringLiteral("tx"), familyTone(ctcss.value(QStringLiteral("tx")).toObject(), tx, false));
+            normalized.insert(QStringLiteral("dcs"), dcs);
+            normalized.insert(QStringLiteral("ctcss"), ctcss);
             m_toneState = normalized.toVariantMap();
             m_toneStates.insert(vfo, m_toneState);
             appendToneLog(QStringLiteral("RX tone_state vfo=%1 memoria=%2 frecuencia=%3 RX=%4 TX=%5")
@@ -895,6 +1569,15 @@ void QuanshengClient::processLine(const QByteArray &line)
         } else if (status == QStringLiteral("error") && m_pendingRadioControl == QStringLiteral("squelch")) {
             m_squelchLevel = m_pendingSquelchPrevious;
             m_pendingRadioControl.clear();
+        } else if (status == QStringLiteral("error") && m_pendingRadioControl == QStringLiteral("vox")) {
+            m_vox = m_pendingVoxPrevious;
+            m_voxLevel = m_pendingVoxLevelPrevious;
+            m_pendingRadioControl.clear();
+        } else if ((status == QStringLiteral("complete") || status == QStringLiteral("error"))
+                   && m_pendingRadioControl == QStringLiteral("menu")) {
+            m_pendingRadioControl.clear();
+            if (status == QStringLiteral("error"))
+                m_pendingMenuReadback = -1;
         }
         emit stateChanged();
     } else if (message == QStringLiteral("eeprom_dump")) {
@@ -937,6 +1620,7 @@ void QuanshengClient::processLine(const QByteArray &line)
         m_eventSilenceSeconds = 0;
         m_eventStreamStalled = false;
         ++m_eventCount;
+        bool displayFallbackChanged = false;
         if (event.contains(QStringLiteral("state"))) {
             m_candidateState = event.value(QStringLiteral("state")).toString();
             if (m_candidateState != QStringLiteral("RX")) {
@@ -966,6 +1650,16 @@ void QuanshengClient::processLine(const QByteArray &line)
         const int field = event.value(QStringLiteral("field")).toInt(-1);
         int lcdX = event.value(QStringLiteral("val1")).toInt(-1);
         int lcdRow = event.value(QStringLiteral("val2")).toInt(-1) + 1;
+        if (type == 7 && (event.value(QStringLiteral("val1")).toInt(-1) == 1
+                          || event.value(QStringLiteral("val1")).toInt(-1) == 5)
+            && event.value(QStringLiteral("val2")).toInt(-1) != 0) {
+            const QString observedVfo = event.value(QStringLiteral("val1")).toInt() == 1
+                ? QStringLiteral("A") : QStringLiteral("B");
+            if (m_activeVfo != observedVfo) {
+                m_activeVfo = observedVfo;
+                displayFallbackChanged = true;
+            }
+        }
         while (lcdX > 128) {
             ++lcdRow;
             lcdX -= 128;
@@ -974,10 +1668,13 @@ void QuanshengClient::processLine(const QByteArray &line)
         const bool vfoB = lcdRow >= 4;
         if (printableText && frequencyOk && text.contains(QLatin1Char('.'))
             && frequency >= 18.0 && frequency <= 1300.0) {
-            if (vfoA)
+            if (vfoA) {
                 m_vfoAFrequencyText = text;
-            else if (vfoB)
+                displayFallbackChanged = true;
+            } else if (vfoB) {
                 m_vfoBFrequencyText = text;
+                displayFallbackChanged = true;
+            }
             m_frequencyText = text;
         }
         static const QStringList modes = {
@@ -985,51 +1682,45 @@ void QuanshengClient::processLine(const QByteArray &line)
             QStringLiteral("WFM"), QStringLiteral("USB"), QStringLiteral("LSB"),
             QStringLiteral("CW")};
         if (printableText && field == 2 && modes.contains(text)) {
-            if (vfoA) m_vfoAMode = text;
-            else if (vfoB) m_vfoBMode = text;
+            if (vfoA) m_vfoAMode = text, displayFallbackChanged = true;
+            else if (vfoB) m_vfoBMode = text, displayFallbackChanged = true;
         }
         if (printableText && field == 2
             && (text.startsWith(QLatin1Char('M')) || text.startsWith(QLatin1Char('F')))) {
-            if (vfoA) m_vfoAMemory = text;
-            else if (vfoB) m_vfoBMemory = text;
+            if (vfoA) m_vfoAMemory = text, displayFallbackChanged = true;
+            else if (vfoB) m_vfoBMemory = text, displayFallbackChanged = true;
         } else if (printableText && field == 7 && !frequencyOk) {
-            if (vfoA) m_vfoAName = text;
-            else if (vfoB) m_vfoBName = text;
+            if (vfoA) m_vfoAName = text, displayFallbackChanged = true;
+            else if (vfoB) m_vfoBName = text, displayFallbackChanged = true;
         }
         if (printableText && field == 1
             && (text == QStringLiteral("H") || text == QStringLiteral("M")
                 || text == QStringLiteral("L"))) {
-            if (vfoA) m_vfoAPower = text;
-            else if (vfoB) m_vfoBPower = text;
+            if (vfoA) m_vfoAPower = text, displayFallbackChanged = true;
+            else if (vfoB) m_vfoBPower = text, displayFallbackChanged = true;
         }
+        if (printableText && text.endsWith(QStringLiteral("kHz"))) {
+            m_stepText = text;
+            if (vfoA) m_vfoAStep = text;
+            else if (vfoB) m_vfoBStep = text;
+            displayFallbackChanged = true;
+        }
+        if (!m_activeVfo.isEmpty())
+            m_frequencyText = m_activeVfo == QStringLiteral("B")
+                ? m_vfoBFrequencyText : m_vfoAFrequencyText;
         m_lastObservationAt = object.value(QStringLiteral("observedAt")).toString();
         m_observationAgeSeconds = 0;
         m_observationFresh = connected();
         m_notificationPending = true;
         if (!m_notifyTimer.isActive())
             m_notifyTimer.start();
+        if (displayFallbackChanged)
+            emit stateChanged();
     } else if (message == QStringLiteral("rssi_state")) {
         m_rssiRaw = object.value(QStringLiteral("raw")).toInt(-1);
         m_rssiDbmUncorrected = object.value(QStringLiteral("dbmUncorrected")).toInt();
-        m_rssiNoise = object.value(QStringLiteral("noise")).toInt(-1);
-        m_rssiGlitch = object.value(QStringLiteral("glitch")).toInt(-1);
-        emit stateChanged();
-    } else if (message == QStringLiteral("register_frequency_state")) {
-        const qulonglong frequencyHz = object.value(QStringLiteral("frequencyHz")).toString().toULongLong();
-        if (frequencyHz > 0) {
-            m_hardwareFrequencyText = QStringLiteral("%1.%2 MHz")
-                    .arg(frequencyHz / 1000000)
-                    .arg(frequencyHz % 1000000, 6, 10, QLatin1Char('0'));
-        }
         emit stateChanged();
     } else if (message == QStringLiteral("register_state")) {
-        const qulonglong frequencyHz = object.value(QStringLiteral("frequencyHz")).toString().toULongLong();
-        if (frequencyHz > 0) {
-            const qulonglong mhz = frequencyHz / 1000000;
-            const qulonglong remainder = frequencyHz % 1000000;
-            m_hardwareFrequencyText = QStringLiteral("%1.%2 MHz")
-                    .arg(mhz).arg(remainder, 6, 10, QLatin1Char('0'));
-        }
         m_hardwareRegisterCount = object.value(QStringLiteral("values")).toObject().size();
         const QJsonObject values = object.value(QStringLiteral("values")).toObject();
         const QStringList registerNames{
@@ -1039,12 +1730,12 @@ void QuanshengClient::processLine(const QByteArray &line)
             QStringLiteral("19"), QStringLiteral("21"), QStringLiteral("24"), QStringLiteral("28"),
             QStringLiteral("29"), QStringLiteral("30"), QStringLiteral("31"),
             QStringLiteral("32"), QStringLiteral("33"),
-            QStringLiteral("36"), QStringLiteral("37"), QStringLiteral("38"), QStringLiteral("39"),
+            QStringLiteral("36"), QStringLiteral("37"),
             QStringLiteral("43"), QStringLiteral("47"), QStringLiteral("48"), QStringLiteral("49"),
-            QStringLiteral("4D"), QStringLiteral("4E"), QStringLiteral("4F"), QStringLiteral("50"),
-            QStringLiteral("51"), QStringLiteral("52"), QStringLiteral("65"), QStringLiteral("67"),
+            QStringLiteral("4E"), QStringLiteral("50"),
+            QStringLiteral("51"), QStringLiteral("52"), QStringLiteral("67"),
             QStringLiteral("68"), QStringLiteral("69"), QStringLiteral("6A"),
-            QStringLiteral("63"), QStringLiteral("64"), QStringLiteral("6F"),
+            QStringLiteral("64"), QStringLiteral("6F"),
             QStringLiteral("70"), QStringLiteral("71"), QStringLiteral("72"),
             QStringLiteral("73"), QStringLiteral("78"), QStringLiteral("7B"),
             QStringLiteral("7C"), QStringLiteral("7D"), QStringLiteral("7E")};
@@ -1103,13 +1794,9 @@ void QuanshengClient::processLine(const QByteArray &line)
         m_hardwareFilterText = QStringLiteral("%1 · RF %2%3 kHz · débil %4%3 kHz")
                 .arg(channelWidth).arg(rfWidths.value(rfIndex)).arg(multiplier).arg(rfWidths.value(weakIndex));
         const QJsonObject squelch = object.value(QStringLiteral("squelch")).toObject();
-        m_hardwareSquelchText = QStringLiteral("RSSI %1/%2 · ruido %3/%4 · glitch %5/%6 · retardo %7/%8")
+        m_hardwareSquelchText = QStringLiteral("RSSI %1/%2 · retardo %3/%4")
                 .arg(squelch.value(QStringLiteral("openRssi")).toInt())
                 .arg(squelch.value(QStringLiteral("closeRssi")).toInt())
-                .arg(squelch.value(QStringLiteral("openNoise")).toInt())
-                .arg(squelch.value(QStringLiteral("closeNoise")).toInt())
-                .arg(squelch.value(QStringLiteral("openGlitch")).toInt())
-                .arg(squelch.value(QStringLiteral("closeGlitch")).toInt())
                 .arg(squelch.value(QStringLiteral("openDelay")).toInt())
                 .arg(squelch.value(QStringLiteral("closeDelay")).toInt());
         const QJsonObject pa = object.value(QStringLiteral("pa")).toObject();
@@ -1228,24 +1915,18 @@ void QuanshengClient::processLine(const QByteArray &line)
         addRegister(QStringLiteral("33"), m_hardwareGpioText);
         addRegister(QStringLiteral("36"), m_hardwarePaText);
         addRegister(QStringLiteral("37"), QStringLiteral("Configuración interna sin desglose confirmado"));
-        addRegister(QStringLiteral("38"), QStringLiteral("Frecuencia: palabra baja"));
-        addRegister(QStringLiteral("39"), QStringLiteral("Frecuencia: palabra alta"));
         addRegister(QStringLiteral("3D"), advanced.value(QStringLiteral("ifValue")).toInt() == 0 ? QStringLiteral("IF USB") : QStringLiteral("IF/configuración de modulación"));
         addRegister(QStringLiteral("43"), m_hardwareFilterText);
         addRegister(QStringLiteral("46"), QStringLiteral("Umbral apertura VOX %1").arg(advanced.value(QStringLiteral("voxOpen")).toInt()));
         addRegister(QStringLiteral("47"), QStringLiteral("Ruta de audio: %1").arg(outputName));
         addRegister(QStringLiteral("48"), m_hardwareAudioText);
         addRegister(QStringLiteral("49"), m_hardwareRfAgcText);
-        addRegister(QStringLiteral("4D"), QStringLiteral("Squelch: glitch de cierre %1").arg(squelch.value(QStringLiteral("closeGlitch")).toInt()));
-        addRegister(QStringLiteral("4E"), QStringLiteral("Squelch: glitch apertura %1; retardos %2/%3").arg(squelch.value(QStringLiteral("openGlitch")).toInt()).arg(squelch.value(QStringLiteral("openDelay")).toInt()).arg(squelch.value(QStringLiteral("closeDelay")).toInt()));
-        addRegister(QStringLiteral("4F"), QStringLiteral("Squelch: ruido apertura/cierre %1/%2").arg(squelch.value(QStringLiteral("openNoise")).toInt()).arg(squelch.value(QStringLiteral("closeNoise")).toInt()));
+        addRegister(QStringLiteral("4E"), QStringLiteral("Umbral de apertura y retardo del squelch %1 · %2/%3").arg(squelch.value(QStringLiteral("openRssi")).toInt()).arg(squelch.value(QStringLiteral("openDelay")).toInt()).arg(squelch.value(QStringLiteral("closeDelay")).toInt()));
         addRegister(QStringLiteral("50"), registerValue(QStringLiteral("50")) & 0x8000
                     ? QStringLiteral("Audio TX silenciado") : QStringLiteral("Audio TX no silenciado"));
         addRegister(QStringLiteral("51"), m_hardwareCssText);
         addRegister(QStringLiteral("52"), QStringLiteral("CTCSS: cola y umbrales %1/%2").arg(css.value(QStringLiteral("foundThreshold")).toInt()).arg(css.value(QStringLiteral("lostThreshold")).toInt()));
-        addRegister(QStringLiteral("63"), QStringLiteral("Indicador glitch %1").arg(registerValue(QStringLiteral("63")) & 0xff));
         addRegister(QStringLiteral("64"), QStringLiteral("Amplitud voz/VOX %1").arg(registerValue(QStringLiteral("64")) & 0x7fff));
-        addRegister(QStringLiteral("65"), QStringLiteral("Indicador de ruido; pendiente de validar"));
         addRegister(QStringLiteral("67"), QStringLiteral("RSSI de registro; pendiente de validar"));
         addRegister(QStringLiteral("68"), QStringLiteral("Medición interna; pendiente"));
         addRegister(QStringLiteral("69"), QStringLiteral("Medición interna; pendiente"));
@@ -1279,6 +1960,20 @@ void QuanshengClient::processLine(const QByteArray &line)
                 m_dualWatch = observedDualWatch;
                 m_dualWatchKnown = true;
                 if (m_pendingRadioControl == QStringLiteral("dual_watch"))
+                    m_pendingRadioControl.clear();
+            }
+        }
+        if (indicators.contains(QStringLiteral("vox"))) {
+            const bool observedVox = indicators.value(QStringLiteral("vox")).toBool();
+            if (m_pendingRadioControl != QStringLiteral("vox")
+                || observedVox != m_pendingVoxPrevious) {
+                m_vox = observedVox;
+                if (!observedVox)
+                    m_voxLevel = 0;
+                else if (m_voxLevel == 0)
+                    m_voxLevel = 1;
+                m_voxKnown = true;
+                if (m_pendingRadioControl == QStringLiteral("vox"))
                     m_pendingRadioControl.clear();
             }
         }
@@ -1338,8 +2033,8 @@ void QuanshengClient::processLine(const QByteArray &line)
         updateIfPresent(m_vfoBMode, b, QStringLiteral("mode"));
         updateIfPresent(m_vfoAPower, a, QStringLiteral("power"));
         updateIfPresent(m_vfoBPower, b, QStringLiteral("power"));
-        updateIfPresent(m_vfoAStep, a, QStringLiteral("step"));
-        updateIfPresent(m_vfoBStep, b, QStringLiteral("step"));
+        m_vfoAStep = a.value(QStringLiteral("step")).toString();
+        m_vfoBStep = b.value(QStringLiteral("step")).toString();
         const int batteryPercent = indicators.value(QStringLiteral("batteryPercent")).toInt(-1);
         if (batteryPercent >= 0) m_batteryPercent = batteryPercent;
         if (indicators.contains(QStringLiteral("signalLevel"))) {
@@ -1350,7 +2045,7 @@ void QuanshengClient::processLine(const QByteArray &line)
             const QString value = indicators.value(key).toString();
             if (!value.isEmpty()) target = value;
         };
-        updateIndicator(m_stepText, QStringLiteral("step"));
+        m_stepText = indicators.value(QStringLiteral("step")).toString();
         updateIndicator(m_toneIndicator, QStringLiteral("tone"));
         updateIndicator(m_lastDtmf, QStringLiteral("lastDtmf"));
         QStringList activeIndicators;

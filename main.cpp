@@ -5,21 +5,31 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
+#include <QQuickWindow>
+#include <qqml.h>
 #include <QUrl>
 #include <QDir>
+#include <QDebug>
 #include <QStandardPaths>
 #include <QTimer>
+#include <cstdio>
 
 #include "radiocontroller.h"
 #include "morsetrainer.h"
 #include "remoteserver.h"
 #include "applicationlauncher.h"
 #include "quanshengclient.h"
+#include "videocapturecontroller.h"
+#include "qrzlogbookcontroller.h"
 #include "build_timestamp.h"
 
 int main(int argc, char *argv[])
 {
+    std::fprintf(stderr, "Inicio: entrando en main()\n");
+    std::fflush(stderr);
     QGuiApplication app(argc, argv);
+    std::fprintf(stderr, "Inicio: QGuiApplication creada\n");
+    std::fflush(stderr);
 
     QString runtimeDirectory = QStandardPaths::writableLocation(
         QStandardPaths::RuntimeLocation);
@@ -43,6 +53,8 @@ int main(int argc, char *argv[])
             || !instanceLock.tryLock(100))
             return 0;
     }
+    std::fprintf(stderr, "Inicio: bloqueo de instancia adquirido\n");
+    std::fflush(stderr);
 
     // La vista compacta sustituye temporalmente a la ventana principal.
     // No se debe terminar el proceso durante ese intercambio; el cierre
@@ -103,11 +115,21 @@ int main(int argc, char *argv[])
 
     QQuickStyle::setStyle(QStringLiteral("Fusion"));
 
+    std::fprintf(stderr, "Inicio: creando controladores\n");
+    std::fflush(stderr);
     RadioController radioController;
+    std::fprintf(stderr, "Inicio: RadioController creado\n");
+    std::fflush(stderr);
     MorseTrainer morseTrainer;
-    RemoteServer remoteServer(&radioController);
     ApplicationLauncher applicationLauncher;
+    std::fprintf(stderr, "Inicio: ApplicationLauncher creado\n");
+    std::fflush(stderr);
     QuanshengClient quanshengClient;
+    VideoCaptureController videoCapture;
+    QrzLogbookController qrzLogbook;
+    RemoteServer remoteServer(&radioController, &quanshengClient);
+    std::fprintf(stderr, "Inicio: controladores creados\n");
+    std::fflush(stderr);
     QObject::connect(&applicationLauncher, &ApplicationLauncher::lanFrequencyReceived,
                      &radioController, [&radioController](qulonglong hz) {
         radioController.setExternalFrequency(hz);
@@ -222,12 +244,20 @@ int main(int argc, char *argv[])
     QObject::connect(
         &app,
         &QCoreApplication::aboutToQuit,
+        &videoCapture,
+        &VideoCaptureController::stopCapture,
+        Qt::DirectConnection
+    );
+    QObject::connect(
+        &app,
+        &QCoreApplication::aboutToQuit,
         &remoteServer,
         &RemoteServer::shutdown,
         Qt::DirectConnection
     );
 
     QQmlApplicationEngine engine;
+    qmlRegisterType<VideoFrameItem>("Icom.Video", 1, 0, "VideoFrameItem");
     engine.rootContext()->setContextProperty(
         QStringLiteral("buildTimestamp"),
         QStringLiteral(APP_BUILD_TIMESTAMP)
@@ -252,6 +282,14 @@ int main(int argc, char *argv[])
         QStringLiteral("quanshengClient"),
         &quanshengClient
     );
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("videoCapture"),
+        &videoCapture
+    );
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("qrzLogbook"),
+        &qrzLogbook
+    );
 
     const QUrl mainQmlUrl(QStringLiteral("qrc:/Main.qml"));
 
@@ -261,19 +299,56 @@ int main(int argc, char *argv[])
         &app,
         [mainQmlUrl](QObject *object, const QUrl &objectUrl) {
             if (!object && objectUrl == mainQmlUrl) {
+                qCritical().noquote()
+                    << "QML: no se pudo crear la ventana principal:" << objectUrl;
                 QCoreApplication::exit(-1);
+                return;
             }
+            auto *window = qobject_cast<QQuickWindow *>(object);
+            if (!window)
+                return;
+            const auto reportWindow = [window](const char *stage) {
+                qInfo().noquote()
+                    << "Inicio QML:" << stage
+                    << "visible=" << window->isVisible()
+                    << "visibility=" << window->visibility()
+                    << "geometry=" << window->geometry();
+            };
+            reportWindow("raiz creada");
+            QObject::connect(window, &QWindow::visibleChanged, window,
+                [reportWindow](bool) { reportWindow("cambio de visibilidad"); });
+            QTimer::singleShot(1500, window,
+                [reportWindow]() { reportWindow("1,5 s"); });
         },
         Qt::QueuedConnection
     );
 
-    engine.load(mainQmlUrl);
+    QObject::connect(&engine, &QQmlApplicationEngine::warnings, &app,
+        [](const QList<QQmlError> &warnings) {
+            for (const QQmlError &warning : warnings)
+                qWarning().noquote() << "QML:" << warning.toString();
+        });
 
-    if (quanshengClient.autoConnectOnStartup()) {
+    std::fprintf(stderr, "Inicio: cargando Main.qml\n");
+    std::fflush(stderr);
+    engine.load(mainQmlUrl);
+    std::fprintf(stderr, "Inicio: engine.load() terminado, raíces=%zu\n",
+                 static_cast<size_t>(engine.rootObjects().size()));
+    std::fflush(stderr);
+
+    if (quanshengClient.autoConnectOnStartup()
+        || (quanshengClient.serverLocation() == QStringLiteral("local")
+            && quanshengClient.autoStartLocalServer())) {
         QTimer::singleShot(0, &quanshengClient, [&quanshengClient]() {
-            quanshengClient.connectToServer();
+            if (quanshengClient.serverLocation() == QStringLiteral("local")
+                && quanshengClient.autoStartLocalServer())
+                quanshengClient.startServerGuiBySsh();
+            else
+                quanshengClient.connectToServer();
         });
     }
 
+    std::fprintf(stderr, "Inicio: entrando en app.exec()\n");
+    std::fflush(stderr);
     return app.exec();
 }

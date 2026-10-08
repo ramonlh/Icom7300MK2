@@ -146,8 +146,18 @@ ApplicationLauncher::ApplicationLauncher(QObject *parent)
         780, settings.value("compactWindow/width", 780).toInt());
     m_compactModePreferred = settings.value(
         "compactWindow/preferred", false).toBool();
+    m_startupViewMode = settings.value(
+        QStringLiteral("ui/startupViewMode"),
+        m_compactModePreferred ? QStringLiteral("compact")
+                               : QStringLiteral("normal")).toString().toLower();
+    if (m_startupViewMode != QStringLiteral("normal")
+        && m_startupViewMode != QStringLiteral("compact")
+        && m_startupViewMode != QStringLiteral("frequency"))
+        m_startupViewMode = QStringLiteral("normal");
     m_mainWindowX = settings.value("mainWindow/x", -1).toInt();
     m_mainWindowY = settings.value("mainWindow/y", -1).toInt();
+    m_memoryQuickWindowX = settings.value("memoryQuickWindow/x", -1).toInt();
+    m_memoryQuickWindowY = settings.value("memoryQuickWindow/y", -1).toInt();
     m_compactAlwaysOnTop = settings.value(
         "compactWindow/alwaysOnTop", true).toBool();
     m_lanHost = settings.value("lan/host", m_lanHost).toString();
@@ -157,6 +167,10 @@ ApplicationLauncher::ApplicationLauncher(QObject *parent)
     m_lastRadioTab = std::clamp(settings.value(QStringLiteral("ui/lastRadioTab"), 0).toInt(), 0, 1);
     m_icomPanelVisible = settings.value(QStringLiteral("ui/icomPanelVisible"), true).toBool();
     m_quanshengPanelVisible = settings.value(QStringLiteral("ui/quanshengPanelVisible"), true).toBool();
+    if (!m_icomPanelVisible && !m_quanshengPanelVisible) {
+        m_icomPanelVisible = true;
+        settings.setValue(QStringLiteral("ui/icomPanelVisible"), true);
+    }
     m_decodiumProcess->setStandardOutputFile(QProcess::nullDevice());
     m_decodiumProcess->setStandardErrorFile(QProcess::nullDevice());
     connect(m_decodiumProcess, &QProcess::started,
@@ -232,6 +246,7 @@ ApplicationLauncher::ApplicationLauncher(QObject *parent)
                 setStatus(QStringLiteral("No se pudo iniciar JS8Call"));
                 emit js8callRunningChanged();
             });
+
 }
 
 qulonglong ApplicationLauncher::rttyFrequencyHz() const { return m_rttyFrequencyHz; }
@@ -366,6 +381,24 @@ QString ApplicationLauncher::quanshengBandMemoriesJson() const
 {
     return QSettings().value(QStringLiteral("quansheng/bandMemoriesJson"), QStringLiteral("{}"))
         .toString();
+}
+
+QString ApplicationLauncher::quanshengMenuReadSelectionJson() const
+{
+    return QSettings().value(QStringLiteral("quansheng/menuReadSelectionJson"), QStringLiteral("{}"))
+        .toString();
+}
+
+void ApplicationLauncher::setQuanshengMenuReadSelectionJson(const QString &value)
+{
+    if (value.isEmpty()) return;
+    QSettings settings;
+    const QString key = QStringLiteral("quansheng/menuReadSelectionJson");
+    if (settings.value(key, QStringLiteral("{}" )).toString() == value)
+        return;
+    settings.setValue(key, value);
+    settings.sync();
+    emit quanshengMenuReadSelectionChanged();
 }
 
 void ApplicationLauncher::setQuanshengBandMemoriesJson(const QString &value)
@@ -1807,6 +1840,25 @@ void ApplicationLauncher::setCompactModePreferred(bool value)
     emit compactModePreferredChanged();
 }
 
+QString ApplicationLauncher::startupViewMode() const
+{
+    return m_startupViewMode;
+}
+
+void ApplicationLauncher::setStartupViewMode(const QString &value)
+{
+    QString mode = value.trimmed().toLower();
+    if (mode != QStringLiteral("normal")
+        && mode != QStringLiteral("compact")
+        && mode != QStringLiteral("frequency"))
+        mode = QStringLiteral("normal");
+    if (mode == m_startupViewMode)
+        return;
+    m_startupViewMode = mode;
+    QSettings().setValue(QStringLiteral("ui/startupViewMode"), mode);
+    emit startupViewModeChanged();
+}
+
 int ApplicationLauncher::mainWindowX() const { return m_mainWindowX; }
 int ApplicationLauncher::mainWindowY() const { return m_mainWindowY; }
 
@@ -1824,6 +1876,34 @@ void ApplicationLauncher::setMainWindowY(int value)
     m_mainWindowY = value;
     QSettings().setValue(QStringLiteral("mainWindow/y"), value);
     emit mainWindowPositionChanged();
+}
+
+int ApplicationLauncher::memoryQuickWindowX() const
+{
+    return m_memoryQuickWindowX;
+}
+
+int ApplicationLauncher::memoryQuickWindowY() const
+{
+    return m_memoryQuickWindowY;
+}
+
+void ApplicationLauncher::setMemoryQuickWindowX(int value)
+{
+    if (value == m_memoryQuickWindowX)
+        return;
+    m_memoryQuickWindowX = value;
+    QSettings().setValue(QStringLiteral("memoryQuickWindow/x"), value);
+    emit memoryQuickWindowPositionChanged();
+}
+
+void ApplicationLauncher::setMemoryQuickWindowY(int value)
+{
+    if (value == m_memoryQuickWindowY)
+        return;
+    m_memoryQuickWindowY = value;
+    QSettings().setValue(QStringLiteral("memoryQuickWindow/y"), value);
+    emit memoryQuickWindowPositionChanged();
 }
 
 bool ApplicationLauncher::compactAlwaysOnTop() const
@@ -1866,6 +1946,10 @@ bool ApplicationLauncher::icomPanelVisible() const
 
 void ApplicationLauncher::setIcomPanelVisible(bool value)
 {
+    if (!value && !m_quanshengPanelVisible) {
+        emit radioPanelsVisibilityChanged();
+        return;
+    }
     if (value == m_icomPanelVisible)
         return;
     m_icomPanelVisible = value;
@@ -1880,6 +1964,10 @@ bool ApplicationLauncher::quanshengPanelVisible() const
 
 void ApplicationLauncher::setQuanshengPanelVisible(bool value)
 {
+    if (!value && !m_icomPanelVisible) {
+        emit radioPanelsVisibilityChanged();
+        return;
+    }
     if (value == m_quanshengPanelVisible)
         return;
     m_quanshengPanelVisible = value;
@@ -2122,6 +2210,30 @@ void ApplicationLauncher::stopJs8call()
     QTimer::singleShot(1800, m_js8callProcess, [this]() {
         if (js8callRunning()) m_js8callProcess->kill();
     });
+}
+
+bool ApplicationLauncher::icomVideoRunning() const
+{
+    return m_icomVideoRunning;
+}
+
+bool ApplicationLauncher::startIcomVideo()
+{
+    if (m_icomVideoRunning)
+        return true;
+
+    m_icomVideoRunning = true;
+    emit icomVideoRunningChanged();
+    return true;
+}
+
+void ApplicationLauncher::stopIcomVideo()
+{
+    if (!m_icomVideoRunning)
+        return;
+
+    m_icomVideoRunning = false;
+    emit icomVideoRunningChanged();
 }
 
 void ApplicationLauncher::setStatus(const QString &status)

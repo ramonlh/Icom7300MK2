@@ -32,10 +32,11 @@ exclusión de otros controles, timeout, discrepancia y cancelación por desconex
 **PENDIENTE:** validación física del recorrido de menús, tiempos, lectura y
 persistencia en el UV-K5 del Pavilion. Se deben actualizar servidor y cliente.
 El estado leído es una instantánea confirmada por los menús de la radio, no una
-notificación espontánea de CTCSS/DCS. El cliente la solicita automáticamente al
-entrar en modo memoria y después de cada cambio de canal de memoria; en VFO se
-mantiene la lectura explícita. La navegación debe devolver la radio a la pantalla
-operativa y conservar su VFO, modo y canal.
+notificación espontánea de CTCSS/DCS. El cliente solicita automáticamente solo
+TX CTCSS (menú 06) al entrar en modo memoria y después de cada cambio de canal;
+la lectura manual sigue cubriendo los cuatro tonos. En VFO se mantiene la lectura
+explícita. La navegación debe devolver la radio a la pantalla operativa y
+conservar su VFO, modo y canal.
 
 **CONFIRMADO offline en esta sesión:** compilan aplicación principal y servidor;
 12/12 suites Quansheng (incluida `lan-tones`, A/B y rechazo sin permiso) y 2/2
@@ -119,9 +120,12 @@ solicita entonces un volcado completo mediante Hello y ReadEeprom, sin implement
 WriteEeprom. El resto de mensajes de control continúa rechazado.
 
 **Actualización de telemetría experimental:** la consulta lenta BK4819 abarca
-50 registros cada 30 segundos, sin alterar GetRssi (1 s) ni la frecuencia interna
-`0x38/0x39` (2 s). Se excluyen los registros de banderas de interrupción `0x02`
-y `0x3F`. La primera lectura lenta se solicita a los 3,5 segundos del arranque;
+46 registros cada 30 segundos, sin alterar GetRssi (1 s). Solo se conservan y
+muestran los datos RSSI de su respuesta; ruido y glitch se ignoran. También se
+excluyen de la consulta periódica los indicadores `0x4D`, `0x4F`, `0x63` y
+`0x65`, además de la frecuencia interna `0x38/0x39` y las banderas `0x02` y
+`0x3F`.
+La primera lectura lenta se solicita a los 3,5 segundos del arranque;
 las siguientes mantienen los 30 segundos. La tabla del cliente reserva siempre
 las 128 direcciones `0x00-0x7F`.
 

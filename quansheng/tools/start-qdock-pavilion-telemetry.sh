@@ -12,7 +12,9 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${QDOCK_SERVER_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 SERVER="${PROJECT_DIR}/build/qdock-server"
-if [[ -e /dev/ttyACM0 ]]; then
+if [[ -n "${QDOCK_SERIAL_DEVICE:-}" ]]; then
+    DEVICE="${QDOCK_SERIAL_DEVICE}"
+elif [[ -e /dev/ttyACM0 ]]; then
     DEVICE="/dev/ttyACM0"
 else
     DEVICE="/dev/ttyUSB0"
@@ -28,7 +30,7 @@ fi
 TOKEN="${QDOCK_LAN_TOKEN}"
 
 echo "Servidor Quansheng con telemetría EXPERIMENTAL"
-echo "Consulta frecuencia cada 2 s, RSSI cada segundo y 50 registros a los 3,5 s y después cada 30 s."
+echo "Consulta RSSI cada segundo y 50 registros a los 3,5 s y después cada 30 s."
 echo "Permite lectura EEPROM solicitada desde el cliente; nunca escribe EEPROM."
 echo "Cambio de frecuencia VFO normal habilitado bajo petición; el firmware puede guardar en EEPROM. TX/PTT y escritura de registros/GPIO siguen bloqueados."
 echo

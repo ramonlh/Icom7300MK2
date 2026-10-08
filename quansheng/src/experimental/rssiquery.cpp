@@ -25,8 +25,6 @@ bool decodeRssiInfo(const Event& event, RssiReading& reading) {
         || event.data[2] != 0x04 || event.data[3] != 0x00)
         return false;
     reading.raw = event.data[4] | (static_cast<std::uint16_t>(event.data[5]) << 8);
-    reading.noise = event.data[6] & 0x7f;
-    reading.glitch = event.data[7];
     return reading.raw <= 0x01ff;
 }
 

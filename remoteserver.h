@@ -13,6 +13,7 @@ class QTimer;
 class QAudioSource;
 class QIODevice;
 class RadioController;
+class QuanshengClient;
 
 class RemoteServer final : public QObject
 {
@@ -30,6 +31,7 @@ class RemoteServer final : public QObject
 
 public:
     explicit RemoteServer(RadioController *radioController,
+                          QuanshengClient *quanshengClient,
                           QObject *parent = nullptr);
     ~RemoteServer() override;
 
@@ -88,10 +90,15 @@ private:
 
     [[nodiscard]] bool authorized(const QHash<QByteArray, QByteArray> &headers) const;
     [[nodiscard]] QByteArray radioStateJson() const;
+    [[nodiscard]] QByteArray quanshengStateJson() const;
     [[nodiscard]] QByteArray handleCommand(const QByteArray &body,
                                            int *httpStatus,
                                            QString *errorText);
+    [[nodiscard]] QByteArray handleQuanshengCommand(const QByteArray &body,
+                                                   int *httpStatus,
+                                                   QString *errorText);
     [[nodiscard]] QByteArray loadWebPage() const;
+    [[nodiscard]] QByteArray loadQuanshengWebPage() const;
 
     void sendResponse(QTcpSocket *socket,
                       int statusCode,
@@ -100,6 +107,7 @@ private:
                       const QList<QPair<QByteArray, QByteArray>> &extraHeaders = {});
 
     RadioController *m_radio = nullptr;
+    QuanshengClient *m_quansheng = nullptr;
     QTcpServer *m_server = nullptr;
     QTimer *m_clientTimer = nullptr;
     QHash<QTcpSocket *, QByteArray> m_buffers;

@@ -33,6 +33,7 @@ class Radio:
         self.selection = 0
         self.values = {3: 0, 4: 9, 5: 105, 6: 0}
         self.keys = []
+        self.visited_menus = []
         self.commits = []
         self.silent = False
         self.ignore_commit = False
@@ -106,6 +107,8 @@ class Radio:
                 if int(self.digits) > 0:
                     self.menu = int(self.digits)
                 if len(self.digits) == 2:
+                    if self.menu in (3, 4, 5, 6):
+                        self.visited_menus.append(self.menu)
                     self.digits = ''
         else:
             raise AssertionError(f'unexpected key {key}')
@@ -188,6 +191,16 @@ try:
     until('tone_status', status='rejected')
     assert not radio.keys
 
+    radio.values[6] = 1
+    radio.visited_menus.clear()
+    send(message='read_tones', vfo='A', txCtcssOnly=True)
+    partial = until('tone_state')
+    assert partial['partial'] is True
+    assert partial['ctcss']['tx'] == {'type': 1, 'index': 0, 'text': '67.0 Hz'}
+    assert radio.visited_menus == [6], radio.visited_menus
+    until('tone_status', status='complete', partial=True)
+    radio.values[6] = 0
+
     send(message='read_tones', vfo='A')
     until('tone_status', status='starting')
     send(message='set_mode', vfo='A', mode='AM')
@@ -195,6 +208,14 @@ try:
     state = until('tone_state')
     assert state['rx'] == {'type': 1, 'index': 8, 'text': '88.5 Hz'}
     assert state['tx'] == {'type': 3, 'index': 0, 'text': 'D023I'}
+    assert state['dcs'] == {
+        'rx': {'type': 0, 'index': 0, 'text': 'OFF'},
+        'tx': {'type': 3, 'index': 0, 'text': 'D023I'},
+    }
+    assert state['ctcss'] == {
+        'rx': {'type': 1, 'index': 8, 'text': '88.5 Hz'},
+        'tx': {'type': 0, 'index': 0, 'text': 'OFF'},
+    }
     until('tone_status', status='complete')
     assert not radio.commits, 'reading must never accept a setting'
 

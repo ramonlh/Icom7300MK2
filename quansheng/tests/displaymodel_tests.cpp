@@ -88,6 +88,16 @@ int main() {
     assert(flags.locked && flags.charging && flags.batteryPercent == 93);
     assert(flags.signalLevel == 9 && flags.signalOver == 3);
     assert(flags.step == "5.00kHz" && flags.tone == "C" && flags.lastDtmf == "B");
+    auto stepA = ui(0, 61, 2, "5.00kHz"); model.apply(stepA);
+    auto stepB = ui(0, 61, 5, "12.50kHz"); model.apply(stepB);
+    assert(model.vfoA().step == "5.00kHz" && model.vfoB().step == "12.50kHz");
+    auto clearA = ui(5, 1, 2); clearA.val1 = 1; clearA.val2 = 3;
+    model.apply(clearA);
+    assert(model.vfoA().step.empty() && model.vfoB().step == "12.50kHz");
+    assert(model.indicators().step == "12.50kHz");
+    auto clearB = ui(5, 5, 7); clearB.val1 = 5; clearB.val2 = 7;
+    model.apply(clearB);
+    assert(model.vfoB().step.empty() && model.indicators().step.empty());
     auto idle = ui(6, 0, 0); idle.val1 = 0; idle.field = 196; model.apply(idle);
     assert(model.indicators().signalLevel == -1 && model.indicators().signalOver == 0);
 }

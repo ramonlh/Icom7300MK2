@@ -37,8 +37,20 @@ bool openConfigured(QSerialPort& port, const QString& name,
 
 void listPorts() {
     QTextStream out(stdout);
-    for (const auto& info : QSerialPortInfo::availablePorts())
-        out << info.systemLocation() << '\t' << info.description() << '\n';
+    for (const auto& info : QSerialPortInfo::availablePorts()) {
+        out << info.systemLocation();
+        if (!info.description().isEmpty())
+            out << '\t' << info.description();
+        if (!info.manufacturer().isEmpty())
+            out << "\tmanufacturer=" << info.manufacturer();
+        if (info.hasVendorIdentifier())
+            out << "\tvid=0x" << QString::number(info.vendorIdentifier(), 16);
+        if (info.hasProductIdentifier())
+            out << "\tpid=0x" << QString::number(info.productIdentifier(), 16);
+        if (!info.serialNumber().isEmpty())
+            out << "\tserial=" << info.serialNumber();
+        out << '\n';
+    }
 }
 bool openReadOnly(QSerialPort& port, const QString& name, QString& error) {
     return openConfigured(port, name, QIODevice::ReadOnly, error);

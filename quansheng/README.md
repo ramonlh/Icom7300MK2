@@ -16,7 +16,9 @@ ni flashea firmware.
 ## CTCSS y DCS RX/TX
 
 En el panel Quansheng, **CTCSS / DCS…** abre el editor del VFO seleccionado.
-**Leer RX / TX** consulta los cuatro menús de tonos; **Escribir RX/TX** aplica
+**Leer RX / TX** consulta los cuatro menús de tonos; al entrar en MR o cambiar
+de memoria, la lectura automática consulta solo TX CTCSS (menú 06).
+**Escribir RX/TX** aplica
 OFF, uno de los 50 CTCSS o uno de los 104 DCS normales/invertidos, y vuelve a
 leer la pantalla para comprobarlo. OFF desactiva ambas familias. Los índices
 EEPROM se muestran también como frecuencias Hz o códigos DCS de tres cifras.
@@ -53,6 +55,15 @@ rápida al soltar, con el servidor actualizado en el Pavilion. Los casos de
 caducidad y desconexión siguen validados únicamente offline.
 Los fallos de cable/USB o la terminación forzada del servidor pueden impedir
 entregar la orden de liberación. Véase `docs/LAN_PROTOCOL.md`.
+
+## Desplazamiento de repetidor
+
+La ventana principal permite leer y ajustar para el VFO activo `TxODir`
+(`OFF`, `+` o `-`) y `TxOffs` en MHz. El offset se introduce con resolución de
+100 Hz y el firmware lo redondea al paso configurado en el VFO. La aplicación
+envía la secuencia de teclas del menú; no escribe EEPROM. La lectura confirma
+los valores observados de nuevo en pantalla. El control requiere el permiso de
+menús del servidor y todavía debe validarse con la radio física.
 
 ## Compilar y probar sin radio
 
@@ -234,6 +245,16 @@ No sobrescribe archivos. Un fallo de captura cierra la adquisición con error;
 stats incluye capturedBytes. La captura es binaria y admite replay con el probe.
 Las pruebas PTY comprueban contenido exacto, protección contra sobrescritura y
 fallos de creación/escritura. Su prueba con radio física sigue pendiente.
+
+Con el permiso de control de frecuencia activado, el cliente también puede
+ajustar VOX mediante el menú `VOX` 57 del firmware Dock. El nivel 0 es OFF y
+1–9 seleccionan sensibilidad; no existe escritura directa de EEPROM desde el
+servidor.
+
+El cliente puede solicitar reinicio del servidor con `restart_server`. Cuando el
+servidor corre dentro de `qdock-server-gui`, la ventana lo relanza con los mismos
+parámetros. Si se ejecuta `qdock-server` directamente en una terminal, la orden
+lo cierra con código 75 y no hay relanzamiento automático.
 
 Análisis y copia preservada del primer registro físico LAN:
 [docs/LIVE_SESSION_2026-09-11.md](docs/LIVE_SESSION_2026-09-11.md).

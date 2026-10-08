@@ -64,11 +64,17 @@ solo sobre el VFO normal y simula las teclas numéricas; el firmware puede marca
 el canal para guardarlo en EEPROM. `txControlAvailable` solo es true con
 `--allow-ptt` y fuente serie escuchando. No se habilita escritura de registros.
 
-La misma autorización permite `set_dual_watch` (`enabled` booleano) y
-`set_squelch` (`level` entero 0–9). Ambos simulan exclusivamente el menú normal
-del firmware Dock 0.32.21q (`RxMode` 59 y `Sql` 61); no escriben registros ni
-EEPROM directamente, aunque el propio firmware puede guardar el ajuste igual que
-cuando se realiza desde el teclado de la radio.
+La misma autorización permite `set_dual_watch` (`enabled` booleano),
+`set_vox` (`level` entero 0–9; también acepta `enabled` por compatibilidad) y
+`set_squelch` (`level` entero 0–9). También permite `set_menu`
+(`menu` 0–99, `value` 0–9, `control` opcional descriptivo) para controles
+operativos acotados del cliente como `Step` 1, `TxPower` 2, `TxTout` 29 y
+`ChDisp` 33. Simulan
+exclusivamente el menú normal del firmware Dock 0.32.21q (`VOX` 57,
+`RxMode` 59 y `Sql` 61, más el número de menú solicitado por `set_menu`); no
+escriben registros ni EEPROM directamente, aunque el propio firmware puede
+guardar el ajuste igual que cuando se realiza desde el teclado de la radio. En
+VOX, nivel 0 es OFF y 1–9 seleccionan sensibilidad.
 
 Tras `{"message":"subscribe"}`, el servidor envía:
 
@@ -105,6 +111,12 @@ y `pending`. Un final con pendientes no es un replay completo de todas las trama
 Después de autenticarse puede enviarse `{"message":"ping"}` para recibir
 `{"message":"pong"}`. Ese intercambio prueba el servicio LAN, no una radio.
 
+Después de autenticarse puede enviarse `{"message":"restart_server"}`. El
+servidor responde `{"message":"server_status","status":"restarting"}` y sale
+con código 75. La ventana `qdock-server-gui` interpreta ese código y relanza el
+proceso con los mismos parámetros; si `qdock-server` se ejecuta directamente por
+consola, la orden solo detiene ese proceso.
+
 Con `eepromReadAvailable: true`, un cliente ya suscrito puede enviar
 `{"message":"read_eeprom"}`. El servidor inicia `Hello 0x0514` y encadena
 lecturas `0x051B` de 128 bytes hasta completar `0x0000-0x1FFF`. Publica
@@ -132,10 +144,15 @@ Errores: `{"message":"error","code":"..."}`, seguido de cierre. Códigos:
 Con `frequencyControlAvailable: true`, un cliente suscrito puede enviar
 `{"message":"set_frequency","frequencyHz":145675000}`. El servidor valida
 VFO activo normal, bloqueo/escaneo, TX y rango EGZUMER 18–1300 MHz. Se excluye
-la zona BK4819 aproximadamente 630–840 MHz, y publica
-`frequency_status` (`starting`, `sent`, `complete` o `error`). No se acepta ningún
-mensaje de teclas arbitrarias ni escritura cruda; se rechazan como
-`unsupported_message`. PTT utiliza el contrato independiente descrito abajo. La lectura EEPROM conserva su permiso
+la zona BK4819 aproximadamente 630–840 MHz. Para conservar resolución de 10 Hz,
+configura el menú Step (1) a 0.01 kHz al primer uso de cada VFO en la sesión,
+introduce los kHz con las teclas numéricas y aplica el residuo mediante UP/DOWN.
+Las pulsaciones se espacian para evitar que el firmware pierda teclas. También
+se admite `{"message":"step_frequency","vfo":"A","direction":"up"}` (o
+`down`) para cambiar 10 Hz; esta operación está separada de `memory_step`, que
+sigue navegando canales. El servidor publica `frequency_status` (`starting`,
+`sent`, `complete` o `error`). No se acepta ningún mensaje de teclas arbitrarias
+ni escritura cruda; se rechazan como `unsupported_message`. PTT utiliza el contrato independiente descrito abajo. La lectura EEPROM conserva su permiso
 independiente `--allow-eeprom-query`. `hello` es
 autenticación LAN, nunca el comando de radio 0x0514.
 
@@ -189,13 +206,21 @@ capacidades reflejan las opciones habilitadas. La suscripción devuelve un `sour
 - `session`: UUID de adquisición compartido, independiente del cliente.
 - `status`: listening, ended o error. listening significa puerto abierto, no radio validada.
 - `portOpen`: apertura efectiva del puerto.
+- `portName` y `portState`: dispositivo y estado `open`, `busy`, `error` o `closed`.
 - `error`: detalle del fallo, vacío si no hay error.
 - `nextSequence`: siguiente evento global; el cliente tardío comienza en ese número.
 
 Eventos y calidad mantienen el formato del replay con `source: "serial"`.
 `observedAt` es hora de recepción/procesamiento en el servidor, no reloj de radio.
-Cada segundo se emiten estadísticas acumuladas, incluso sin bytes de entrada;
-esto mantiene visible la diferencia entre servicio activo y radio silenciosa.
+Cada segundo se emiten estadísticas acumuladas y `serial_status` con el estado,
+dispositivo, error, bytes/eventos y hora de actualización, incluso sin bytes de
+entrada. Así el cliente puede distinguir puerto abierto, ocupado o con error, y
+refrescar su indicación periódicamente aunque la radio esté silenciosa.
+`source_status` y `serial_status` incluyen `serialDisconnectCount` y
+`serialRecoveryCount`, acumulados por dispositivo y persistidos por el servidor
+en `$XDG_STATE_HOME/qdock/serial-counters.ini` (o `~/.local/state/qdock/` si
+`XDG_STATE_HOME` no está definido). Solo se cuenta como corte una pérdida tras
+haber abierto el puerto, y como recuperación la reapertura automática posterior.
 Al vencer la duración o fallar el puerto se cierra la adquisición y se publican
 estadísticas finales y estado. El servidor sigue vivo y responde ping/suscripciones.
 
@@ -293,7 +318,10 @@ JSON estrictos; no se aceptan códigos arbitrarios ni cadenas como índices.
 `rejected` se envía solo al solicitante cuando no se puede iniciar y no termina
 una operación en curso. `complete` requiere releer y comprobar el menú tras
 escribir. Antes de complete se publica `tone_state`: vfo, frequency, memory,
-observedAt, rx/tx con type, index y text. Es una instantánea de pantalla, no
+observedAt, rx/tx con type, index y text. La respuesta incluye también `dcs` y
+`ctcss`, cada uno con sus campos `rx` y `tx` de type, index y text. Esos cuatro
+valores se leen por separado de los menús 03–06; `rx/tx` se conserva como resumen
+compatible que da prioridad a CTCSS cuando está activo. La instantánea no es
 confirmación RF ni de persistencia en memoria, y no representa un paquete
 espontáneo de configuración enviado por la radio. Al entrar en modo memoria y
 tras cambiar de canal, el cliente solicita automáticamente una nueva lectura;
@@ -305,3 +333,21 @@ aparece TX, cambia el VFO observado o falla la verificación. No hay reintentos
 automáticos de escritura. Un error puede dejar un ajuste ya aceptado: releer.
 La radio vuelve al menú principal con EXIT al finalizar, salvo TX o cierre de
 puerto. Protocolo y límites físicos: [PROTOCOL.md](PROTOCOL.md).
+
+## Recuperación automática del puerto serie
+
+Si QSerialPort informa de una pérdida de recurso/lectura/escritura, el servidor
+publica `source_status.status: "reconnecting"`, cierra el descriptor y conserva
+el servicio TCP. Reintenta el mismo nombre de dispositivo con espera creciente
+de 1, 2, 4, 8 y 15 segundos; continúa cada 15 segundos hasta recuperar el puerto
+o vencer `--seconds`. Al reabrir, conserva el identificador de sesión y la
+secuencia de eventos, pero reinicia parser y modelo de pantalla para no unir una
+trama parcial anterior con bytes posteriores. Los permisos se vuelven a anunciar
+en `source_status`; los controles permanecen deshabilitados mientras no se
+recupere la escucha. `TimeoutError` no cierra la fuente: puede ser transitorio.
+
+La reapertura del mismo path no puede corregir un cable, hub, alimentación o
+interferencia defectuosos. Si el dispositivo reaparece con otro nombre, el
+reintento del path configurado no lo sigue automáticamente; verificar el log
+USB del Pavilion y seleccionar un path estable (`/dev/serial/by-id/...`) cuando
+esté disponible.

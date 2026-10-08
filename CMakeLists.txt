@@ -21,6 +21,8 @@ qt_standard_project_setup()
 
 qt_add_executable(Icom7300Mk2Control
     main.cpp
+    videocapturecontroller.cpp
+    videocapturecontroller.h
     applicationlauncher.cpp
     applicationlauncher.h
     radiocontroller.cpp
@@ -31,6 +33,8 @@ qt_add_executable(Icom7300Mk2Control
     remoteserver.h
     quanshengclient.cpp
     quanshengclient.h
+    qrzlogbookcontroller.cpp
+    qrzlogbookcontroller.h
 )
 
 # Refresh the timestamp on every build, including incremental builds.
@@ -48,8 +52,10 @@ qt_add_resources(Icom7300Mk2Control "app_resources"
     PREFIX "/"
     FILES
         Main.qml
+        SelectableLabel.qml
         MorseTrainerWindow.qml
         remote/index.html
+        remote/quansheng.html
         icons/icom7300mk2_control_32.png
         icons/icom7300mk2_control_48.png
         icons/icom7300mk2_control_64.png
@@ -83,7 +89,7 @@ if(ICOM_BUILD_TESTS)
     add_executable(quansheng_ptt_client_test
         tests/quansheng_ptt_client_test.cpp quanshengclient.cpp quanshengclient.h)
     target_include_directories(quansheng_ptt_client_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(quansheng_ptt_client_test PRIVATE Qt6::Quick Qt6::Network)
+    target_link_libraries(quansheng_ptt_client_test PRIVATE Qt6::Quick Qt6::Network Qt6::SerialPort)
     add_test(NAME quansheng_ptt_client COMMAND quansheng_ptt_client_test)
 endif()
 

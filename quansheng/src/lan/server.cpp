@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QTcpServer>
 #include "qdock_build_timestamp.h"
@@ -17,6 +18,7 @@
 #include <QTextStream>
 #include <QTimer>
 #include <QUuid>
+#include <QVector>
 #include <csignal>
 #include <limits>
 
@@ -25,6 +27,7 @@ constexpr qint64 maxRequest = 4096;
 constexpr qint64 maxQueue = 1024 * 1024;
 constexpr qint64 eventQueueLimit = 256 * 1024;
 constexpr int maxClients = 8;
+constexpr int restartExitCode = 75;
 volatile std::sig_atomic_t stopRequested = 0;
 
 void requestStop(int) { stopRequested = 1; }
@@ -64,6 +67,7 @@ private:
         if (auto* serial = qobject_cast<SerialSource*>(source_)) {
             serial->releasePtt(this, "client_disconnected");
             serial->cancelTones(this);
+            serial->cancelMenuValues(this);
         }
 #endif
     }
@@ -130,11 +134,13 @@ private:
             bool txControlAvailable = false;
             bool eepromReadAvailable = false;
             bool frequencyControlAvailable = false;
+            bool menuReadAvailable = false;
 #ifdef QDOCK_SERIAL
             if (auto* serial = qobject_cast<SerialSource*>(source_)) {
                 txControlAvailable = serial->txControlAvailable();
                 eepromReadAvailable = serial->eepromReadAvailable();
                 frequencyControlAvailable = serial->frequencyControlAvailable();
+                menuReadAvailable = frequencyControlAvailable;
             }
 #endif
             send({{"message", "welcome"}, {"protocol", "qdock-lan/1"},
@@ -142,10 +148,18 @@ private:
                   {"txControlAvailable", txControlAvailable}, {"radioControlAvailable", false},
                   {"eepromReadAvailable", eepromReadAvailable},
                   {"frequencyControlAvailable", frequencyControlAvailable},
+                  {"menuReadAvailable", menuReadAvailable},
                   {"toneControlAvailable", frequencyControlAvailable},
                   {"normalizedStateAvailable", false}});
         } else if (message == "ping") {
             send({{"message", "pong"}});
+        } else if (message == "restart_server") {
+            releasePtt();
+            send({{"message", "server_status"}, {"status", "restarting"}});
+            socket_->flush();
+            QTimer::singleShot(200, qApp, [] {
+                QCoreApplication::exit(restartExitCode);
+            });
         } else if (message == "subscribe" && !started_) {
 #ifdef QDOCK_SERIAL
             if (auto* serial = qobject_cast<SerialSource*>(source_)) {
@@ -234,6 +248,17 @@ private:
 #else
             send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
 #endif
+        } else if (message == "step_frequency") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            if (!started_ || !serial) { send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_step_unavailable"}}); return; }
+            const QString direction = object.value("direction").toString();
+            if (direction != "up" && direction != "down") { send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_step_direction_invalid"}}); return; }
+            const QString error = serial->requestFrequencyStep(object.value("vfo").toString(), direction == "up");
+            if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
         } else if (message == "set_mode") {
 #ifdef QDOCK_SERIAL
             auto* serial = qobject_cast<SerialSource*>(source_);
@@ -261,13 +286,16 @@ private:
             const bool write = message == "set_tone";
             const auto type = object.value("type"), index = object.value("index");
             if (!started_ || !serial) error = "tone_control_unavailable";
+            else if (object.contains("txCtcssOnly") && !object.value("txCtcssOnly").isBool())
+                error = "tone_read_selection_invalid";
             else if (write && (!type.isDouble() || !index.isDouble()
                 || type.toDouble() != type.toInt(-1) || index.toDouble() != index.toInt(-1)
                 || (object.value("direction") != "RX" && object.value("direction") != "TX")))
                 error = "tone_value_invalid";
             else error = serial->requestTones(this, object.value("vfo").toString(),
                 write ? object.value("direction").toString() : QString(),
-                type.toInt(-1), index.toInt(-1));
+                type.toInt(-1), index.toInt(-1),
+                !write && object.value("txCtcssOnly").toBool());
             if (!error.isEmpty()) send({{"message", "tone_status"}, {"status", "rejected"}, {"error", error}});
 #else
             send({{"message", "tone_status"}, {"status", "rejected"}, {"error", "tone_control_unavailable"}});
@@ -283,6 +311,62 @@ private:
             if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
 #else
             send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "set_vox") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            int level = object.value("level").toInt(-1);
+            if (level < 0 && object.value("enabled").isBool())
+                level = object.value("enabled").toBool() ? 1 : 0;
+            if (!started_ || !serial || level < 0 || level > 9) {
+                send({{"message", "vfo_status"}, {"status", "error"}, {"error", "vox_unavailable"}}); return;
+            }
+            const QString error = serial->requestVox(level);
+            if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "set_menu") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            const int menu = object.value("menu").toInt(-1);
+            const int value = object.value("value").toInt(-1);
+            const int maximum = menu == 8 ? 99999900 : 999;
+            if (!started_ || !serial || menu < 0 || menu > 99 || value < 0
+                || value > maximum || (menu == 8 && value % 100 != 0)) {
+                send({{"message", "vfo_status"}, {"status", "error"}, {"error", "menu_unavailable"}}); return;
+            }
+            const QString error = serial->requestMenuSetting(
+                menu, value, object.value("control").toString());
+            if (!error.isEmpty()) send({{"message", "vfo_status"}, {"status", "error"}, {"error", error}});
+#else
+            send({{"message", "vfo_status"}, {"status", "error"}, {"error", "frequency_control_unavailable"}});
+#endif
+        } else if (message == "read_menu_values") {
+#ifdef QDOCK_SERIAL
+            auto* serial = qobject_cast<SerialSource*>(source_);
+            const QJsonArray requested = object.value("menus").toArray();
+            QVector<int> menus;
+            menus.reserve(requested.size());
+            bool valid = !requested.isEmpty() && requested.size() <= 61;
+            for (const auto& value : requested) {
+                if (!value.isDouble() || value.toInt(-1) < 1 || value.toInt(-1) > 61) {
+                    valid = false;
+                    break;
+                }
+                menus.append(value.toInt());
+            }
+            if (!started_ || !serial || !valid) {
+                send({{"message", "menu_read_status"}, {"status", "rejected"},
+                      {"error", "menu_read_request_invalid"}});
+                return;
+            }
+            const QString error = serial->requestMenuValues(this, menus);
+            if (!error.isEmpty())
+                send({{"message", "menu_read_status"}, {"status", "rejected"}, {"error", error}});
+#else
+            send({{"message", "menu_read_status"}, {"status", "rejected"},
+                  {"error", "frequency_control_unavailable"}});
 #endif
         } else {
             // Reject raw writes and every non-whitelisted control.
@@ -345,7 +429,7 @@ int main(int argc, char** argv) {
                     {"serial", "Puerto serie autorizado para escucha READ-ONLY.", "dispositivo"},
                     {"capture", "Captura cruda en archivo nuevo del servidor; requiere --serial.", "archivo"},
                     {"allow-rssi-query", "EXPERIMENTAL: permite únicamente GetRssi 0x0527 cada segundo."},
-                    {"allow-register-query", "EXPERIMENTAL: primera lectura de 50 registros a los 3,5 s; después cada 30 s. Frecuencia cada 2 s."},
+                    {"allow-register-query", "EXPERIMENTAL: primera lectura de 46 registros a los 3,5 s; después cada 30 s."},
                     {"allow-eeprom-query", "EXPERIMENTAL: permite una lectura EEPROM completa solicitada por un cliente; nunca escribe."},
                     {"allow-frequency-control", "EXPERIMENTAL: permite cambiar frecuencia del VFO normal mediante teclas; el firmware puede guardar en EEPROM."},
                     {"allow-ptt", "EXPERIMENTAL: habilita PTT momentáneo LAN; puede emitir RF."},

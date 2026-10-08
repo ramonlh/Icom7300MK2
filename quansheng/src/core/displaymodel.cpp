@@ -39,16 +39,24 @@ bool DisplayModel::validMode(const std::string& text) {
 }
 
 void DisplayModel::clearLines(int first, int last) {
-    if (first <= 3 && last >= 1) {
+    const bool clearA = first <= 3 && last >= 1;
+    const bool clearB = first <= 7 && last >= 5;
+    const bool indicatorWasA = !a_.step.empty() && indicators_.step == a_.step;
+    const bool indicatorWasB = !b_.step.empty() && indicators_.step == b_.step;
+    if (clearA) {
         a_ = {};
         aFrequencyMain_.clear();
         aFrequencySuffix_.clear();
     }
-    if (first <= 7 && last >= 5) {
+    if (clearB) {
         b_ = {};
         bFrequencyMain_.clear();
         bFrequencySuffix_.clear();
     }
+    if (clearA && indicatorWasA)
+        indicators_.step = clearB ? std::string{} : b_.step;
+    if (clearB && indicatorWasB)
+        indicators_.step = clearA ? std::string{} : a_.step;
 }
 
 void DisplayModel::updateAfrequency() {

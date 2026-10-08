@@ -21,6 +21,8 @@ class RadioController final : public QObject
                WRITE setTxSafetyTimeoutSeconds NOTIFY txSafetySettingsChanged)
     Q_PROPERTY(bool dataMode READ dataMode NOTIFY dataModeChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    Q_PROPERTY(bool frequencyWritePending READ frequencyWritePending
+               NOTIFY busyChanged)
     Q_PROPERTY(bool memoryReadActive READ memoryReadActive
                NOTIFY memoryReadActiveChanged)
 
@@ -375,6 +377,7 @@ public:
     void setTxSafetyTimeoutSeconds(int seconds);
     [[nodiscard]] bool dataMode() const;
     [[nodiscard]] bool busy() const;
+    [[nodiscard]] bool frequencyWritePending() const;
     [[nodiscard]] bool memoryReadActive() const;
     [[nodiscard]] bool splitEnabled() const;
     [[nodiscard]] bool ritEnabled() const;

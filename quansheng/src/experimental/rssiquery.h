@@ -7,8 +7,6 @@
 namespace qdock::experimental {
 struct RssiReading {
     std::uint16_t raw = 0;
-    std::uint8_t noise = 0;
-    std::uint8_t glitch = 0;
 };
 std::vector<std::uint8_t> makeGetRssiFrame();
 bool decodeRssiInfo(const Event& event, RssiReading& reading);
