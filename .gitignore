@@ -19,3 +19,6 @@ scripts/arrancar-emulador-auto.sh
 
 # Logs de pruebas LAN
 LAN_*.log
+
+# Copias locales de seguridad de archivos fuente
+*.before-dual-radio-layout-*
