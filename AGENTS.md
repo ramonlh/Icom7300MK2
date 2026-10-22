@@ -83,9 +83,13 @@ Commit de referencia:
 
 No modificar esa rama.
 
-El desarrollo nuevo se realiza en:
+El desarrollo se realiza directamente en:
 
-    codex-integracion
+    main
+
+Las versiones publicadas se marcan con etiquetas vX.Y.Z. Para cambios
+arriesgados, crear una rama temporal desde main y fusionarla o descartarla
+al terminar. La rama codex-integracion es histórica y ya no se usa.
 
 ## Archivos importantes
 

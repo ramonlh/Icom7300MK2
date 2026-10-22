@@ -263,7 +263,7 @@ Los archivos generados por CMake, Ninja y Qt no son los fuentes que se deben edi
 
 ## Conservación y desarrollo
 
-- Rama de desarrollo indicada: `codex-integracion`.
+- Rama de desarrollo: `main`; versiones publicadas con etiquetas `vX.Y.Z`. La rama `codex-integracion` es histórica.
 - Referencia estable indicada: rama `backup-pre-codex-2026-09-10`, commit `995f65c`; no modificarla.
 - Mantener separados los protocolos Icom CI-V y Quansheng.
 - Hacer cambios incrementales, compilar y ejecutar las pruebas relevantes cuando se modifique código.

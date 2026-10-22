@@ -120,7 +120,7 @@ def docs(stage, name, ver, source, quansheng=False):
     copy(ROOT / 'packaging/INSTALAR.md', directory / 'INSTALAR.md')
     copy(source / 'README.md', directory / 'README.md')
     if quansheng:
-        put(directory / 'copyright', f'Source: {HOMEPAGE}/tree/codex-integracion/quansheng\n\n'
+        put(directory / 'copyright', f'Source: {HOMEPAGE}/tree/main/quansheng\n\n'
             'Copyright: 2024 nicsure (protocolo original QuanshengDock)\n'
             'Copyright: los autores de QuanshengDock-Linux, según historial Git.\n'
             'License: GPL-2.0-only\n'

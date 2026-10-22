@@ -69,7 +69,11 @@ Mantener como criterio general:
 - Rama de referencia funcional previa a la integración: `backup-pre-codex-2026-09-10`
 - Commit de referencia: `995f65c`
 - **No modificar esa rama.**
-- El desarrollo nuevo se realiza en: `codex-integracion`
+- El desarrollo se realiza directamente en `main`. Las versiones publicadas se
+  marcan con etiquetas `vX.Y.Z`.
+- Para cambios arriesgados, crear una rama temporal desde `main` y fusionarla
+  o descartarla al terminar.
+- La rama `codex-integracion` es histórica; ya no se usa para desarrollo.
 - No hacer commits, push, merges ni rebases salvo petición expresa.
 
 ## Archivos importantes
