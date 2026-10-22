@@ -12,6 +12,8 @@
 #include <QDebug>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QProcess>
+#include <QHostInfo>
 #include <cstdio>
 
 #include "radiocontroller.h"
@@ -50,8 +52,48 @@ int main(int argc, char *argv[])
         // when a timed diagnostic ends).  removeStaleLockFile validates the
         // recorded process before deleting, so a live instance stays safe.
         if (!instanceLock.removeStaleLockFile()
-            || !instanceLock.tryLock(100))
+            || !instanceLock.tryLock(100)) {
+            qint64 runningPid = 0;
+            QString lockHost;
+            QString lockApp;
+            instanceLock.getLockInfo(&runningPid, &lockHost, &lockApp);
+
+            QString visibility = QStringLiteral("No se pudo comprobar si tiene ventana visible.");
+            const QString wmctrl = QStandardPaths::findExecutable(QStringLiteral("wmctrl"));
+            if (!wmctrl.isEmpty() && lockHost == QHostInfo::localHostName()) {
+                QProcess windows;
+                windows.start(wmctrl, {QStringLiteral("-lp")});
+                if (windows.waitForFinished(1500)
+                    && windows.exitStatus() == QProcess::NormalExit
+                    && windows.exitCode() == 0) {
+                    bool foundWindow = false;
+                    const QList<QByteArray> lines = windows.readAllStandardOutput().split('\n');
+                    for (const QByteArray &line : lines) {
+                        const QList<QByteArray> fields = line.simplified().split(' ');
+                        if (fields.size() >= 3 && fields.at(2).toLongLong() == runningPid) {
+                            foundWindow = true;
+                            break;
+                        }
+                    }
+                    visibility = foundWindow
+                        ? QStringLiteral("El gestor de ventanas informa que tiene una ventana (posiblemente minimizada).")
+                        : QStringLiteral("No aparece ninguna ventana en el gestor de ventanas; puede haberse quedado oculto.");
+                }
+            }
+
+            const QString message = QStringLiteral(
+                "Ya hay una instancia del cliente en ejecución (PID %1). %2\n"
+                "No la he cerrado automáticamente. Si está bloqueada, puedes terminarla con: kill -TERM %1")
+                .arg(runningPid > 0 ? QString::number(runningPid) : QStringLiteral("desconocido"), visibility);
+            const QString notifySend = QStandardPaths::findExecutable(QStringLiteral("notify-send"));
+            if (!notifySend.isEmpty()) {
+                QProcess::startDetached(notifySend, {
+                    QStringLiteral("Cliente ya en ejecución"), message
+                });
+            }
+            qWarning().noquote() << message;
             return 0;
+        }
     }
     std::fprintf(stderr, "Inicio: bloqueo de instancia adquirido\n");
     std::fflush(stderr);
