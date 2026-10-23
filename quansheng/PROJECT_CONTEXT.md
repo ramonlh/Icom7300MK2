@@ -29,8 +29,10 @@ Nueva prueba en `parser_tests.cpp`; `probe_test.py` y `lan_test.py` exigen ahora
 la ausencia del falso positivo. 13/13 suites aprobadas. **PENDIENTE:** actualizar
 y recompilar `qdock-server` en el Pavilion, y observarlo con la radio.
 
-El repositorio `QuanshengDock-Linux` de GitHub queda como histórico; el
-desarrollo continúa en este subsistema. Su aplicación local `qdock-control`
+Desde el 23 de octubre de 2026 la rama `main` de `QuanshengDock-Linux` es una
+copia sincronizada de este subsistema (`scripts/sincronizar-quansheng.sh` en la
+raíz del repositorio Icom); el desarrollo continúa aquí. Su contenido anterior
+se conserva en la rama `historico-2026-09-12` de ese repositorio. Su aplicación local `qdock-control`
 (escritura de registros BK4819 por serie) no se ha incorporado.
 
 ### Inestabilidad del enlace PL2303 — 12 de septiembre de 2026

@@ -113,6 +113,7 @@ Automatización de compilación, publicación y flujos de GitHub.
 - `.github/workflows/publicar-version.yml`
 - `scripts/build-timestamp.cmake`
 - `scripts/publicar-version.sh`
+- `scripts/sincronizar-quansheng.sh` — Publica `quansheng/` en el repositorio QuanshengDock-Linux.
 
 ## Empaquetado y manuales
 

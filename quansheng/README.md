@@ -7,6 +7,12 @@ Contexto y reglas:
 - `PROJECT_CONTEXT.md`
 - `AGENTS.md`
 
+El desarrollo se hace en el subsistema `quansheng/` de
+[ramonlh/Icom7300MK2](https://github.com/ramonlh/Icom7300MK2/tree/main/quansheng).
+[ramonlh/QuanshengDock-Linux](https://github.com/ramonlh/QuanshengDock-Linux)
+es una copia sincronizada de ese directorio, útil para clonar solo el servidor;
+no se deben hacer cambios directamente en ella.
+
 Primera versión: `qdock-probe` de consola, sin GUI, con parser independiente de Qt.
 `qdock-probe` no envía bytes a la radio. `qdock-server` mantiene ese comportamiento
 sin opciones adicionales; sus consultas, controles de teclado y PTT son
