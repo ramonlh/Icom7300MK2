@@ -41,5 +41,15 @@ int main() {
     qdock::Parser noise;
     std::vector<std::uint8_t> garbage(1000000, 0x42);
     check(noise.feed(garbage.data(), garbage.size()).empty() && noise.pending() == 0, "bounded noise");
+    // A B5 in the bytes after a status looks like a text header that swallows
+    // the next element; rejecting the binary text recovers that element.
+    qdock::Parser spurious;
+    const std::vector<std::uint8_t> mixed = {0xb5,0,0,1,0,9,0x06,0x84,0,
+        0xb5,0,0,1,0,3,'1','4','5'};
+    const auto recovered = spurious.feed(mixed.data(), mixed.size());
+    check(recovered.size() == 1 && recovered[0].type == 0
+          && recovered[0].data == std::vector<std::uint8_t>({'1','4','5'}),
+          "binary text rejected, following text recovered");
+    check(spurious.discarded() == 9, "rejected text bytes accounted");
     std::cout << "Parser checks passed\n";
 }

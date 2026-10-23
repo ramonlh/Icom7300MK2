@@ -40,5 +40,9 @@ with tempfile.TemporaryDirectory() as directory:
     texts = {event.get('text') for event in events}
     assert {'M1', 'VA.LEON', '145.67500', '110.937', 'AM', 'Sql', 'Step', 'TxPwr', '6.25kHz'} <= texts
     assert 'pendientes=0' in result.stderr
-    # UI has no checksum: the current parser also emits one spurious text event.
-    # Do not treat every decoded text as a validated radio state.
+    # Text elements are ASCII in the upstream protocol. Reject the known
+    # false-positive type-0 candidate containing binary data, while retaining
+    # all printable text from the physical capture.
+    assert not any(event.get('type') == 0 and event.get('field') == 181
+                   for event in events)
+    # UI has no checksum: decoded text is still a candidate, not radio state.

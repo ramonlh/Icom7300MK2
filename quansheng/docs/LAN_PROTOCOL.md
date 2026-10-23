@@ -178,9 +178,10 @@ reconexión automática, reconstrucción LCD y estado normalizado fiable. El
 control de frecuencia y VFO mediante teclas virtuales es experimental, requiere
 `--allow-frequency-control` y todavía está pendiente de validación física.
 
-El falso positivo de texto de 181 bytes continúa presente y se transporta como
-candidato; la regresión exige conservarlo sin presentarlo como estado validado.
-No se ha resuelto la falsa sincronización. `data_hex` conserva datos del evento,
+El candidato de texto de 181 bytes contiene datos binarios y se descarta por la
+validación ASCII del parser; los textos imprimibles restantes siguen marcados
+como `candidate` y no se presentan como estado validado. UI sigue sin checksum:
+la falsa sincronización solo se detecta cuando produce texto no imprimible. `data_hex` conserva datos del evento,
 no sustituye la captura cruda. No deducir frecuencia/canal del texto, ni TX de la
 cadena "TX", ni validez de respuesta de `crc_matches_command_algorithm`.
 

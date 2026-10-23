@@ -76,8 +76,9 @@ with tempfile.TemporaryDirectory() as directory:
                        for state in display_states)
             assert any(state['vfoB']['frequencyText'] == '110.93750'
                        for state in display_states)
-            # Preserve the documented false positive, explicitly as a candidate.
-            assert any(e.get('type') == 0 and e.get('field') == 181 for e in events)
+            # Binary-looking type-0 false positive is rejected by the parser,
+            # while the remaining physical candidates stay available.
+            assert not any(e.get('type') == 0 and e.get('field') == 181 for e in events)
 
         for payload, expected in [
             (b'[]\n', 'invalid_json'),

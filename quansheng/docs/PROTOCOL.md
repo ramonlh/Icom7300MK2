@@ -91,6 +91,10 @@ Los tres bits bajos de val1 indican 1=TX, 2=RX, 4=ahorro y otro=inactivo.
 Tipos 0–3 contienen texto. Se conservan todos los tipos y campos sin inventar
 semántica; aún no se reconstruye el LCD ni se extraen frecuencia/canal del texto.
 UI no tiene checksum, por lo que ruido con B5 puede parecer un evento válido.
+Para tipos de texto 0–3, el parser acepta únicamente bytes ASCII imprimibles
+(`0x20–0x7e`); un candidato que contenga binario se descarta byte a byte para
+recuperar la siguiente cabecera. Esta comprobación conserva los tipos de estado
+y desconocidos sin asignarles semántica adicional.
 
 ## Fragmentación y límites
 
@@ -266,10 +270,15 @@ texto TX, ni se afirma qué teclas físicas fueron pulsadas realmente.
 La captura completa se conserva como hexadecimal en
 `tests/fixtures/radio-screen.hex` y se reproduce en el test de CLI. Incluye un
 evento espurio tipo 0 de 181 bytes que contiene datos binarios: confirma el
-riesgo de falsa sincronización de UI sin checksum. No se ha ocultado ni
-filtrado este problema. Antes de construir un modelo fiable de frecuencia/canal,
-se debe validar la estructura de elementos UI y mejorar la recuperación usando
-esta captura como regresión, sin eliminar caracteres o tramas válidas.
+riesgo de falsa sincronización de UI sin checksum. Desde el 22 de octubre de
+2026 la validación ASCII de los tipos de texto lo descarta; la captura sigue
+sirviendo de regresión y conserva todos los textos imprimibles.
+
+Una escucha pasiva posterior de 15 s con el mismo PL2303 (`067b:2303`), el 12 de
+septiembre, capturó 288474 bytes, 0 eventos y 0 pendientes; los primeros 64
+bytes fueron `00`. El kernel registró `pl2303_get_line_request -32` y `error
+sending break -32` (SHA-256 de la captura temporal
+`c959934ee9dcc2b63675154addc4eb731e4c585299b8014facd3d40559c789a6`).
 
 Archivos temporales originales: `/tmp/qdock-screen-20260910.raw` y
 `/tmp/qdock-screen-20260910.jsonl`. La frecuencia `110.937` y el fragmento `50`

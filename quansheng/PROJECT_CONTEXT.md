@@ -8,6 +8,45 @@ IC-7300MK2, denominación proporcionada por el usuario.
 Este documento permite retomar el trabajo sin acceder a la conversación original.
 No confundir el port nativo con QuanshengDock Windows bajo Wine.
 
+## Validación de texto UI — 22 de octubre de 2026
+
+Se incorpora la corrección desarrollada el 12 de septiembre en la rama
+`parser-ui-validation` del repositorio independiente
+`github.com/ramonlh/QuanshengDock-Linux` (commit `092a911`), que no había pasado
+a este subsistema. El parser acepta en los tipos de texto 0–3 únicamente bytes
+ASCII imprimibles (`0x20–0x7e`), como el texto ASCII de upstream. Un candidato
+con binario se rechaza byte a byte para buscar la siguiente cabecera B5. Estado,
+borrados y tipos desconocidos se conservan igual que antes.
+
+**CONFIRMADO offline:** en `radio-screen.hex` desaparece el texto espurio tipo 0
+de 181 bytes; se siguen obteniendo 286 eventos, porque se recupera un estado
+tipo 6 que ese candidato ocultaba, sin perder ningún texto imprimible. En las
+cuatro capturas `qdock-pavilion-diagnostico-20260913-*.raw` ningún texto
+imprimible se pierde y aparecen 141 eventos más (330/262, 540/507, 206/183 y
+769/752): textos que antes absorbían cabeceras B5 posteriores. Pueden aparecer
+tipos desconocidos adicionales como candidatos, igual que antes del cambio.
+Nueva prueba en `parser_tests.cpp`; `probe_test.py` y `lan_test.py` exigen ahora
+la ausencia del falso positivo. 13/13 suites aprobadas. **PENDIENTE:** actualizar
+y recompilar `qdock-server` en el Pavilion, y observarlo con la radio.
+
+El repositorio `QuanshengDock-Linux` de GitHub queda como histórico; el
+desarrollo continúa en este subsistema. Su aplicación local `qdock-control`
+(escritura de registros BK4819 por serie) no se ha incorporado.
+
+### Inestabilidad del enlace PL2303 — 12 de septiembre de 2026
+
+Recuperado del mismo repositorio (commit `80456a1`). **ESCUCHA PASIVA
+ADICIONAL:** tras comprobar la enumeración PL2303 (`067b:2303`), `qdock-probe`
+escuchó 15 s sin handshake y guardó `/tmp/qdock-passive-20260912.raw`
+(288474 bytes, SHA-256
+`c959934ee9dcc2b63675154addc4eb731e4c585299b8014facd3d40559c789a6`). El parser
+obtuvo 0 eventos y 0 pendientes; la muestra inicial son bytes `00` repetidos.
+El kernel registró `pl2303_get_line_request -32` y `error sending break -32`.
+En aquel momento se detuvieron las aperturas físicas hasta estabilizar
+cable/adaptador/puerto USB. Las sesiones posteriores del Pavilion (13 de
+septiembre en adelante) sí recibieron datos; la causa del fallo no está
+determinada.
+
 ## CTCSS/DCS — 19 de septiembre de 2026
 
 Ampliación solicitada explícitamente por el usuario: lectura, gestión y escritura
@@ -756,11 +795,8 @@ TX/PTT deshabilitado. No convierte textos de UI en frecuencia/canal ni comparte
 `RadioController`; ambos protocolos siguen separados. La prueba de compilación
 del ejecutable Icom se realizó en `/tmp/icom-gui-build`.
 
-**PENDIENTE inmediato:** mejorar la recuperación/validación de UI para evitar el
-texto espurio conocido. Trabajar primero offline con `radio-screen.hex`; añadir
-una prueba que demuestre eliminar el falso positivo sin perder texto válido.
-Los tests actuales verifican recuperación de textos, pero NO exigen ausencia del
-falso positivo. No filtrar a ciegas bytes o tipos sin contrastar el firmware.
+**RESUELTO OFFLINE (22 de octubre de 2026):** véase la sección «Validación de
+texto UI» al principio de este documento.
 
 **PENDIENTE después:**
 

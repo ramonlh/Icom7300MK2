@@ -133,8 +133,8 @@ y el cliente con `--host IP_DEL_PAVILION`. Las direcciones son marcadores que se
 deben sustituir. El usuario confirmó el replay entre Pavilion (192.168.1.78) y HP principal.
 
 En modo replay el servidor solo lee archivos regulares: no abre `/dev/ttyUSB0`,
-no transmite comandos y no inicia servicios. Todos los eventos se etiquetan como candidatos,
-incluido el falso positivo conocido. Esta fase no modifica la GUI Icom.
+no transmite comandos y no inicia servicios. Todos los eventos se etiquetan como candidatos;
+el parser descarta los textos con datos binarios, como el falso positivo conocido. Esta fase no modifica la GUI Icom.
 
 Contrato, límites y arquitectura local/remota: [docs/LAN_PROTOCOL.md](docs/LAN_PROTOCOL.md).
 
@@ -205,8 +205,8 @@ el programa no transmite datos ni comandos.
 - Validación parcial con radio real: 506 eventos UI de limpieza/estado recibidos
   pasivamente, batería 7.88 V y ahorro de energía. Otra captura de redibujado
   contiene texto de frecuencia, canal y menús, y se reproduce en tests.
-  Falta reconstruir el LCD y un estado estructurado fiable: se ha observado
-  también un evento de texto espurio por falsa sincronización.
+  Falta un estado estructurado fiable. Un evento de texto espurio por falsa
+  sincronización se descarta ahora mediante validación ASCII de los textos.
 - El probe verifica la configuración efectiva de Linux antes de escuchar.
   Se observaron bytes adicionales y una primera captura ilegible; véase el
   diagnóstico en `docs/PROTOCOL.md`. Aún no se considera recepción plenamente estable.

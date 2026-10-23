@@ -7,6 +7,14 @@ namespace qdock {
 namespace {
 constexpr std::uint8_t key[] = {0x16,0x6c,0x14,0xe6,0x2e,0x91,0x0d,0x40,
                                0x21,0x35,0xd5,0x40,0x13,0x03,0xe9,0x80};
+// UI has no checksum: a B5 inside the bytes that follow a type 6 status can
+// look like a header. Text types 0-3 are ASCII upstream, so binary rejects it.
+bool plausibleText(std::uint8_t type, const std::vector<std::uint8_t>& data) {
+    if (type > 3) return true;
+    for (const auto byte : data)
+        if (byte < 0x20 || byte > 0x7e) return false;
+    return true;
+}
 }
 std::uint16_t crc16(const std::vector<std::uint8_t>& data) {
     std::uint16_t crc = 0;
@@ -37,6 +45,7 @@ void Parser::drain(std::vector<Event>& events) {
             e.type = buffer_[1]; e.val1 = buffer_[2]; e.val2 = buffer_[3];
             e.val3 = buffer_[4]; e.field = buffer_[5];
             e.data.assign(buffer_.begin()+6, buffer_.begin()+size);
+            if (!plausibleText(e.type, e.data)) { reject(); continue; }
             events.push_back(std::move(e));
             buffer_.erase(buffer_.begin(), buffer_.begin()+size);
         } else if (buffer_[0] == 0xab) {
