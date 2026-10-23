@@ -517,17 +517,20 @@ EEPROM fields identified as user values are currently displayed in read-only mod
 From the repository root:
 
 ```bash
-cmake -S quansheng -B build-quansheng -DQDOCK_SERIAL=ON
-cmake --build build-quansheng -j2
-ctest --test-dir build-quansheng --output-on-failure
+cmake -S quansheng -B quansheng/build -DQDOCK_SERIAL=ON
+cmake --build quansheng/build -j2
+ctest --test-dir quansheng/build --output-on-failure
 ```
+
+The main application looks for `qdock-server-gui` in `quansheng/build/` to start
+the local server, so always build the subsystem in that directory.
 
 On a system without Qt SerialPort, the core and replay components can be built with limited functionality:
 
 ```bash
-cmake -S quansheng -B build-quansheng -DQDOCK_SERIAL=OFF
-cmake --build build-quansheng -j2
-ctest --test-dir build-quansheng --output-on-failure
+cmake -S quansheng -B quansheng/build -DQDOCK_SERIAL=OFF
+cmake --build quansheng/build -j2
+ctest --test-dir quansheng/build --output-on-failure
 ```
 
 The `QDOCK_SERIAL=OFF` configuration does not allow use of the real serial port.

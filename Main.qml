@@ -12431,6 +12431,21 @@ ApplicationWindow {
                                             onEditingFinished: quanshengClient.host = text
                                         }
                                         Text {
+                                            visible: quanshengClient.serverLocation === "remote"
+                                            text: "Carpeta"; color: "#d9e0e4"; font.pixelSize: 10; font.bold: true
+                                        }
+                                        TextField {
+                                            id: quanshengSettingsRemoteDir
+                                            visible: quanshengClient.serverLocation === "remote"
+                                            Layout.columnSpan: 2
+                                            Layout.fillWidth: true
+                                            text: quanshengClient.remoteServerDir
+                                            placeholderText: "/home/ramon/qdock-readonly"
+                                            onEditingFinished: quanshengClient.remoteServerDir = text
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: "Carpeta del proyecto Quansheng en el PC remoto (contiene build/qdock-server-gui)"
+                                        }
+                                        Text {
                                             visible: quanshengClient.serverLocation === "local"
                                             text: "Host"; color: "#d9e0e4"; font.pixelSize: 10; font.bold: true
                                         }
@@ -12623,6 +12638,7 @@ ApplicationWindow {
                                                     quanshengClient.port = quanshengSettingsPort.value
                                                     if (quanshengClient.serverLocation === "remote") {
                                                         quanshengClient.host = quanshengSettingsHost.text
+                                                        quanshengClient.remoteServerDir = quanshengSettingsRemoteDir.text
                                                         quanshengClient.token = quanshengSettingsToken.text
                                                     }
                                                     quanshengClient.connectToServer()

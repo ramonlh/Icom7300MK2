@@ -377,7 +377,12 @@ int main(int argc, char *argv[])
                      QStringLiteral("short-iso-precise")});
     for (QLabel *label : window.findChildren<QLabel *>())
         label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-    window.show();
+    // Launched by the main application: start minimised, still reachable
+    // from the taskbar.
+    if (qEnvironmentVariableIntValue("QDOCK_GUI_MINIMIZED") > 0)
+        window.showMinimized();
+    else
+        window.show();
     if (autoStart->isChecked())
         QTimer::singleShot(0, start, &QPushButton::click);
     return app.exec();

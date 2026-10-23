@@ -123,6 +123,8 @@ QuanshengClient::QuanshengClient(QObject *parent)
 
     QSettings settings;
     m_host = settings.value(QStringLiteral("quansheng/host"), m_host).toString();
+    m_remoteServerDir = settings.value(QStringLiteral("quansheng/remoteServerDir"),
+                                       m_remoteServerDir).toString();
     const int savedPort = settings.value(QStringLiteral("quansheng/port"), m_port).toInt();
     if (savedPort >= 1 && savedPort <= 65535)
         m_port = savedPort;
@@ -259,6 +261,18 @@ void QuanshengClient::setHost(const QString &host)
         return;
     m_host = value;
     QSettings().setValue(QStringLiteral("quansheng/host"), m_host);
+    emit connectionSettingsChanged();
+}
+
+void QuanshengClient::setRemoteServerDir(const QString &directory)
+{
+    QString value = directory.trimmed();
+    while (value.size() > 1 && value.endsWith(QLatin1Char('/')))
+        value.chop(1);
+    if (value.isEmpty() || value == m_remoteServerDir)
+        return;
+    m_remoteServerDir = value;
+    QSettings().setValue(QStringLiteral("quansheng/remoteServerDir"), m_remoteServerDir);
     emit connectionSettingsChanged();
 }
 
@@ -481,6 +495,9 @@ void QuanshengClient::shutdown()
         m_socket->disconnect(this);
         m_socket->abort();
     }
+    // Only a server this client launched; one started by hand keeps running.
+    if (m_serverLocation == QStringLiteral("local") && m_localServerStartedHere)
+        stopLocalServerProcesses();
 }
 
 void QuanshengClient::disconnectFromServer()
@@ -554,6 +571,8 @@ void QuanshengClient::startServerGuiBySsh()
         environment.insert(QStringLiteral("QDOCK_LAN_PORT"), QString::number(m_port));
         environment.insert(QStringLiteral("QDOCK_SERIAL_DEVICE"), m_localSerialDevice);
         environment.insert(QStringLiteral("QDOCK_GUI_AUTOSTART"), QStringLiteral("1"));
+        // Started from here: keep the server window out of the way.
+        environment.insert(QStringLiteral("QDOCK_GUI_MINIMIZED"), QStringLiteral("1"));
         process.setProcessEnvironment(environment);
         process.setProgram(executable);
         process.setWorkingDirectory(QFileInfo(executable).absolutePath());
@@ -562,6 +581,7 @@ void QuanshengClient::startServerGuiBySsh()
             emit stateChanged();
             return;
         }
+        m_localServerStartedHere = true;
         m_sourceStatus = QStringLiteral("Arrancando servidor local");
         m_reconnectRequested = true;
         emit stateChanged();
@@ -575,7 +595,8 @@ void QuanshengClient::startServerGuiBySsh()
     }
     const QString sshTarget = m_host.contains(QLatin1Char('@'))
         ? m_host.trimmed() : QStringLiteral("ramon@") + m_host.trimmed();
-    const QString serverGui = QStringLiteral("/home/ramon/qdock-readonly/build/qdock-server-gui");
+    const QString serverGui = m_remoteServerDir + QStringLiteral("/build/qdock-server-gui");
+    const QString serverGuiPattern = m_remoteServerDir + QStringLiteral("/build/[q]dock-server-gui");
     const QString portText = QString::number(m_port);
     const QString guiCommand = QStringLiteral(
         "device=\"${QDOCK_SERIAL_DEVICE:-}\"; "
@@ -589,11 +610,13 @@ void QuanshengClient::startServerGuiBySsh()
         "log=/tmp/qdock-server-gui-ssh.log; "
         "echo \"$(date '+%F %T') solicitud de arranque GUI puerto %1\" >> \"$log\"; "
         "if pgrep -a -u \"$USER\" -x qdock-server | grep -F -- '--port %1' >/dev/null; then echo \"servidor ya activo\" >> \"$log\"; exit 0; fi; "
-        "if pgrep -u \"$USER\" -f '/home/ramon/qdock-readonly/build/[q]dock-server-gui($| )' >/dev/null; then "
+        "if pgrep -u \"$USER\" -f %3 >/dev/null; then "
         "echo \"GUI activa sin servidor; relanzando\" >> \"$log\"; "
-        "pkill -TERM -u \"$USER\" -f '/home/ramon/qdock-readonly/build/[q]dock-server-gui' || true; sleep 1; fi; "
+        "pkill -TERM -u \"$USER\" -f %4 || true; sleep 1; fi; "
         "nohup flock -n /tmp/qdock-server-ssh.lock bash -lc %2 >> \"$log\" 2>&1 </dev/null &")
-        .arg(portText, shellQuote(guiCommand));
+        .arg(portText, shellQuote(guiCommand),
+             shellQuote(serverGuiPattern + QStringLiteral("($| )")),
+             shellQuote(serverGuiPattern));
     const bool started = QProcess::startDetached(QStringLiteral("ssh"),
                                                  QStringList{sshTarget, remoteCommand});
     m_sourceStatus = started ? QStringLiteral("arrancando GUI por SSH")
@@ -609,22 +632,12 @@ void QuanshengClient::stopServerGuiBySsh()
     if (m_shuttingDown)
         return;
     if (m_serverLocation == QStringLiteral("local")) {
-        const QString pkill = QStandardPaths::findExecutable(QStringLiteral("pkill"));
-        const QStringList processArgs{QStringLiteral("-TERM"), QStringLiteral("-u"),
-                                      QString::number(getuid()), QStringLiteral("-x")};
-        const int serverResult = pkill.isEmpty() ? -1
-            : QProcess::execute(pkill, {QStringLiteral("-TERM"), QStringLiteral("-u"),
-                                         QString::number(getuid()), QStringLiteral("-x"),
-                                         QStringLiteral("qdock-server")});
-        QStringList guiArgs = processArgs;
-        guiArgs.append(QStringLiteral("qdock-server-gui"));
-        const int guiResult = pkill.isEmpty() ? -1
-            : QProcess::execute(pkill, guiArgs);
+        const bool stopped = stopLocalServerProcesses();
         if (m_socket->state() != QAbstractSocket::UnconnectedState)
             m_socket->abort();
         m_reconnectRequested = false;
         m_reconnectTimer.stop();
-        m_sourceStatus = serverResult == 0 || guiResult == 0
+        m_sourceStatus = stopped
             ? QStringLiteral("Servidor local detenido")
             : QStringLiteral("No se encontró un servidor local activo");
         emit stateChanged();
@@ -640,10 +653,11 @@ void QuanshengClient::stopServerGuiBySsh()
         ? m_host.trimmed() : QStringLiteral("ramon@") + m_host.trimmed();
     const QString portText = QString::number(m_port);
     const QString remoteCommand = QStringLiteral(
-        "pkill -TERM -u \"$USER\" -f '/home/ramon/qdock-readonly/build/[q]dock-server .*--port %1' || true; "
-        "pkill -TERM -u \"$USER\" -f '/home/ramon/qdock-readonly/build/[q]dock-server-gui' || true; "
+        "pkill -TERM -u \"$USER\" -f %1 || true; "
+        "pkill -TERM -u \"$USER\" -f %2 || true; "
         "pkill -TERM -u \"$USER\" -f 'flock -n /tmp/qdock-server-ssh.lock bash -lc .*QDOCK_GUI_AUTOSTART=1' || true")
-        .arg(portText);
+        .arg(shellQuote(m_remoteServerDir + QStringLiteral("/build/[q]dock-server .*--port ") + portText),
+             shellQuote(m_remoteServerDir + QStringLiteral("/build/[q]dock-server-gui")));
     const bool started = QProcess::startDetached(QStringLiteral("ssh"),
                                                  QStringList{sshTarget, remoteCommand});
     if (m_socket->state() != QAbstractSocket::UnconnectedState)
@@ -653,6 +667,24 @@ void QuanshengClient::stopServerGuiBySsh()
     m_sourceStatus = started ? QStringLiteral("parando GUI por SSH")
                              : QStringLiteral("error parando GUI por SSH");
     emit stateChanged();
+}
+
+bool QuanshengClient::stopLocalServerProcesses()
+{
+    m_localServerStartedHere = false;
+    const QString pkill = QStandardPaths::findExecutable(QStringLiteral("pkill"));
+    if (pkill.isEmpty())
+        return false;
+    const auto stop = [&pkill](const QString &matchOption, const QString &pattern) {
+        return QProcess::execute(pkill, {QStringLiteral("-TERM"), QStringLiteral("-u"),
+                                         QString::number(getuid()), matchOption, pattern});
+    };
+    // The window does not forward SIGTERM to its child: stop both. Process
+    // names are cut to 15 characters, so the window is matched by command line.
+    const int serverResult = stop(QStringLiteral("-x"), QStringLiteral("qdock-server"));
+    const int guiResult = stop(QStringLiteral("-f"),
+                               QStringLiteral("(^|/)qdock-server-gui( |$)"));
+    return serverResult == 0 || guiResult == 0;
 }
 
 void QuanshengClient::restartServer()

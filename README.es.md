@@ -517,17 +517,20 @@ Los campos EEPROM identificados como valores de usuario se muestran actualmente 
 Desde la raíz del repositorio:
 
 ```bash
-cmake -S quansheng -B build-quansheng -DQDOCK_SERIAL=ON
-cmake --build build-quansheng -j2
-ctest --test-dir build-quansheng --output-on-failure
+cmake -S quansheng -B quansheng/build -DQDOCK_SERIAL=ON
+cmake --build quansheng/build -j2
+ctest --test-dir quansheng/build --output-on-failure
 ```
+
+La aplicación principal busca `qdock-server-gui` en `quansheng/build/` para arrancar
+el servidor local, por lo que conviene compilar siempre en ese directorio.
 
 En un sistema sin Qt SerialPort puede compilarse el núcleo y el replay con funcionalidad limitada:
 
 ```bash
-cmake -S quansheng -B build-quansheng -DQDOCK_SERIAL=OFF
-cmake --build build-quansheng -j2
-ctest --test-dir build-quansheng --output-on-failure
+cmake -S quansheng -B quansheng/build -DQDOCK_SERIAL=OFF
+cmake --build quansheng/build -j2
+ctest --test-dir quansheng/build --output-on-failure
 ```
 
 La configuración `QDOCK_SERIAL=OFF` no permite utilizar el puerto serie real.

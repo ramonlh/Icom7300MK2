@@ -719,10 +719,10 @@ ctest --test-dir build --output-on-failure
 Como alternativa, desde `~/Icom7300MK2`:
 
 ```sh
-cmake -S quansheng -B build-quansheng -DQDOCK_SERIAL=ON
-cmake --build build-quansheng -j2
-ctest --test-dir build-quansheng --output-on-failure
-./build-quansheng/qdock-probe --help
+cmake -S quansheng -B quansheng/build -DQDOCK_SERIAL=ON
+cmake --build quansheng/build -j2
+ctest --test-dir quansheng/build --output-on-failure
+./quansheng/build/qdock-probe --help
 ```
 
 Los ejemplos posteriores usan el directorio del proyecto Quansheng

@@ -241,8 +241,7 @@ Cliente LAN y scripts y lanzadores destinados al Pavilion.
 | Carpeta | Contenido |
 |---|---|
 | `build/` | Compilación de la aplicación principal: ejecutables, objetos, recursos Qt, configuración CMake y resultados de pruebas. |
-| `build-quansheng/` | Compilación independiente del subsistema Quansheng y resultados de pruebas. |
-| `quansheng/build/` | Otra carpeta local de compilación del subsistema. |
+| `quansheng/build/` | Única compilación del subsistema Quansheng; la aplicación principal busca aquí `qdock-server-gui`. |
 | `build-packages/` | Directorios de preparación y resultados de empaquetado: `check/`, `dist/`, `icom/` y `quansheng/`. |
 | `quansheng/reference/` | Ubicación de referencias externas; tratar como referencia de solo lectura. No se enumera su contenido en este inventario. |
 | `.git/` | Historial, ramas y metadatos de Git. |

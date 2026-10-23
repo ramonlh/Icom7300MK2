@@ -16,6 +16,7 @@ class QuanshengClient final : public QObject
     Q_OBJECT
 
     Q_PROPERTY(QString host READ host WRITE setHost NOTIFY connectionSettingsChanged)
+    Q_PROPERTY(QString remoteServerDir READ remoteServerDir WRITE setRemoteServerDir NOTIFY connectionSettingsChanged)
     Q_PROPERTY(int port READ port WRITE setPort NOTIFY connectionSettingsChanged)
     Q_PROPERTY(QString token READ token WRITE setToken NOTIFY connectionSettingsChanged)
     Q_PROPERTY(QString serverLocation READ serverLocation WRITE setServerLocation NOTIFY connectionSettingsChanged)
@@ -121,6 +122,7 @@ public:
     ~QuanshengClient() override;
 
     QString host() const { return m_host; }
+    QString remoteServerDir() const { return m_remoteServerDir; }
     int port() const { return m_port; }
     QString token() const { return m_token; }
     QString serverLocation() const { return m_serverLocation; }
@@ -217,6 +219,7 @@ public:
     QString error() const { return m_error; }
 
     void setHost(const QString &host);
+    void setRemoteServerDir(const QString &directory);
     void setPort(int port);
     void setToken(const QString &token);
     void setServerLocation(const QString &location);
@@ -289,6 +292,7 @@ private:
     void appendToneLog(const QString &message);
     void finishRadioControlWait();
     void scheduleMenuWriteReadback();
+    bool stopLocalServerProcesses();
     void updateSerialPortStatus(const QJsonObject &object);
 
     QTcpSocket *m_socket = nullptr;
@@ -308,6 +312,7 @@ private:
     bool m_notificationPending = false;
     QByteArray m_buffer;
     QString m_host = QStringLiteral("127.0.0.1");
+    QString m_remoteServerDir = QStringLiteral("/home/ramon/qdock-readonly");
     int m_port = 8765;
     QString m_token;
     QString m_serverLocation = QStringLiteral("local");
@@ -319,6 +324,7 @@ private:
     bool m_autoStartLocalServer = false;
     bool m_reconnectRequested = false;
     bool m_shuttingDown = false;
+    bool m_localServerStartedHere = false;
     QString m_sourceStatus = QStringLiteral("desconectado");
     bool m_serialAvailable = false;
     QString m_serialPortState = QStringLiteral("unknown");
